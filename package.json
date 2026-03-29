@@ -10,7 +10,7 @@
     "typecheck": "pnpm -r typecheck",
     "prisma:generate": "pnpm --filter backend prisma:generate",
     "prisma:migrate": "pnpm --filter backend prisma:migrate",
-    "prisma:deploy": "pnpm --filter backend exec prisma migrate deploy"
+    "prisma:deploy": "pnpm --filter backend prisma:deploy"
   },
   "engines": {
     "node": ">=20.0.0"

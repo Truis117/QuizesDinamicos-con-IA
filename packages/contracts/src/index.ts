@@ -48,13 +48,17 @@ export const RefreshBodySchema = z.object({
 export type RefreshBody = z.infer<typeof RefreshBodySchema>;
 
 export const CreateSessionBodySchema = z.object({
-  topic: z.string().min(2).max(180)
+  topic: z.string().min(2).max(180),
+  sourceMaterial: z.string().min(20).max(12000).optional(),
+  sourceUrl: z.string().url().optional()
 });
 export type CreateSessionBody = z.infer<typeof CreateSessionBodySchema>;
 
 export const CreateRoundBodySchema = z.object({
   count: z.union([z.literal(5), z.literal(10), z.literal(15)]),
-  difficulty: DifficultySchema.optional()
+  difficulty: DifficultySchema.optional(),
+  sourceMaterial: z.string().min(20).max(12000).optional(),
+  sourceUrl: z.string().url().optional()
 });
 export type CreateRoundBody = z.infer<typeof CreateRoundBodySchema>;
 
@@ -64,6 +68,31 @@ export const AttemptBodySchema = z.object({
   responseTimeSec: z.number().min(0).max(3600).optional()
 });
 export type AttemptBody = z.infer<typeof AttemptBodySchema>;
+
+export const SessionSummarySubtopicSchema = z.object({
+  subtopic: z.string(),
+  attempts: z.number().int().nonnegative(),
+  correct: z.number().int().nonnegative(),
+  wrong: z.number().int().nonnegative(),
+  accuracy: z.number().min(0).max(1),
+  masteryScore: z.number().min(0).max(1)
+});
+export type SessionSummarySubtopic = z.infer<typeof SessionSummarySubtopicSchema>;
+
+export const SessionSummarySchema = z.object({
+  sessionId: z.string(),
+  topic: z.string(),
+  totals: z.object({
+    answered: z.number().int().nonnegative(),
+    correct: z.number().int().nonnegative(),
+    wrong: z.number().int().nonnegative(),
+    accuracy: z.number().min(0).max(1),
+    avgResponseTimeSec: z.number().min(0)
+  }),
+  subtopics: z.array(SessionSummarySubtopicSchema),
+  recommendations: z.array(z.string())
+});
+export type SessionSummary = z.infer<typeof SessionSummarySchema>;
 
 export const UserPublicSchema = z.object({
   id: z.string(),

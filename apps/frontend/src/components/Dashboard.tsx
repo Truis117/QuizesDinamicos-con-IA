@@ -11,7 +11,7 @@ export function Dashboard({ onStartSession }: { onStartSession: (id: string) => 
 
   const handleStart = async () => {
     if (!topic.trim()) {
-      setError("Please enter a topic");
+      setError("Introduce un tema");
       return;
     }
     
@@ -29,7 +29,7 @@ export function Dashboard({ onStartSession }: { onStartSession: (id: string) => 
       });
       onStartSession(session.id);
     } catch (err: any) {
-      setError(err.message || "Failed to start quiz");
+      setError(err.message || "No se pudo iniciar el quiz");
     } finally {
       setIsLoading(false);
     }
@@ -45,15 +45,15 @@ export function Dashboard({ onStartSession }: { onStartSession: (id: string) => 
             onClick={logout}
             className="text-sm px-4 py-2 rounded-lg bg-white/5 hover:bg-white/10 transition-colors border border-white/5"
           >
-            Logout
+            Cerrar sesion
           </button>
         </div>
 
         <div className="text-center mt-8 mb-10">
           <h1 className="text-4xl md:text-5xl font-heading font-bold mb-4 bg-gradient-to-r from-white to-white/60 bg-clip-text text-transparent">
-            What do you want to learn?
+            Que quieres aprender?
           </h1>
-          <p className="text-white/60">Generate an AI-powered quiz on any topic in seconds.</p>
+          <p className="text-white/60">Genera un quiz con IA sobre cualquier tema en segundos.</p>
         </div>
 
         {error && (
@@ -68,7 +68,7 @@ export function Dashboard({ onStartSession }: { onStartSession: (id: string) => 
             <input 
               value={topic} 
               onChange={e => setTopic(e.target.value)} 
-              placeholder="e.g. Roman Empire, React Hooks, Quantum Physics" 
+              placeholder="Ej: Imperio romano, React Hooks, Fisica cuantica" 
               className="w-full px-6 py-5 text-lg rounded-2xl bg-white/5 border border-white/10 text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-accent transition-all duration-150 shadow-inner"
               onKeyDown={e => {
                 if (e.key === 'Enter') handleStart();
@@ -79,7 +79,7 @@ export function Dashboard({ onStartSession }: { onStartSession: (id: string) => 
           {/* Question Count Selector */}
           <div>
             <label className="block text-sm font-medium text-white/50 text-center mb-3">
-              Number of Questions
+              Numero de preguntas
             </label>
             <div className="flex justify-center gap-3">
               {[5, 10, 15].map(count => (
@@ -110,9 +110,9 @@ export function Dashboard({ onStartSession }: { onStartSession: (id: string) => 
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>
-                Generating Quiz...
+                Generando quiz...
               </>
-            ) : "Generate Quiz"}
+            ) : "Generar quiz"}
           </button>
         </div>
 

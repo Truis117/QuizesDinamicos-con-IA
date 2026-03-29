@@ -32,7 +32,7 @@ app.get("/health", (req, res) => {
 app.use("/api/auth", authRouter);
 app.use("/api/sessions", sessionRouter);
 
-app.use("/api/*", (req, res) => {
+app.all("/api/*", (req, res) => {
   res.status(404).json({ error: "API endpoint not found" });
 });
 

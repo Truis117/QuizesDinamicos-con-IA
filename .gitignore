@@ -1,11 +1,39 @@
+# Dependencies
 node_modules/
+.pnpm-store/
+
+# Build outputs and caches
 dist/
-.DS_Store
+build/
+coverage/
+*.tsbuildinfo
+apps/frontend/.vite/
+
+# Environment files
 .env
-.env.local
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Logs
 *.log
-pnpm-lock.yaml
-apps/backend/prisma/migrations/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local/dev artifacts
+register_res.json
+sample_response.json
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+
+# Local agent files
 .agents/
 skills-lock.json
 plan.md

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "pnpm -r --parallel --stream dev",
     "build": "pnpm -r build",
-    "start": "pnpm prisma:deploy && pnpm --filter backend start",
+    "start": "pnpm --filter backend start:prod",
     "typecheck": "pnpm -r typecheck",
     "prisma:generate": "pnpm --filter backend prisma:generate",
     "prisma:migrate": "pnpm --filter backend prisma:migrate",

@@ -3,7 +3,7 @@ import { z } from "zod";
 
 const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  PORT: z.coerce.number().int().positive().default(4000),
+  PORT: z.coerce.number().int().positive().default(3000),
   DATABASE_URL: z.string().min(1),
   FRONTEND_ORIGIN: z.string().url().default("http://localhost:5173"),
   JWT_ACCESS_SECRET: z.string().min(16).default("dev_access_secret_change_me_1234"),
@@ -16,7 +16,7 @@ const EnvSchema = z.object({
   OPENROUTER_MODEL_FALLBACK: z
     .string()
     .default("meta-llama/llama-3.1-8b-instruct:free"),
-  OPENROUTER_SITE_URL: z.string().url().default("http://localhost:4000"),
+  OPENROUTER_SITE_URL: z.string().url().default("http://localhost:3000"),
   OPENROUTER_SITE_NAME: z.string().default("QuizDinamico AI")
 });
 

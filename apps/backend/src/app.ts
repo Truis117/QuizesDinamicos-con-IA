@@ -32,7 +32,7 @@ app.get("/health", (req, res) => {
 app.use("/api/auth", authRouter);
 app.use("/api/sessions", sessionRouter);
 
-app.all("/api/*", (req, res) => {
+app.all("/api/(.*)", (req, res) => {
   res.status(404).json({ error: "API endpoint not found" });
 });
 
@@ -40,7 +40,7 @@ app.all("/api/*", (req, res) => {
 if (env.NODE_ENV === "production") {
   const frontendDist = path.join(__dirname, "../../frontend/dist");
   app.use(express.static(frontendDist));
-  app.get("*", (req, res) => {
+  app.get("(.*)", (req, res) => {
     res.sendFile(path.join(frontendDist, "index.html"));
   });
 }

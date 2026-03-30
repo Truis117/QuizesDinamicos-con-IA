@@ -40,13 +40,31 @@ export type GenerateQuestionsResult = {
   promptTokens?: number;
   completionTokens?: number;
   fromCache: boolean;
+  generationAttempts: number;
 };
+
+const GENERIC_PATTERNS = [
+  /concepto\s*\d+/i,
+  /afirmacion\s*(resume|mejor|describe)/i,
+  /^option\s*[a-d]/i,
+  /^pregunta\s*\d+/i,
+  /^question\s*\d+/i,
+  /statement\s*\d+/i,
+  /^p\d+/i,
+  /^\([a-z]+\)\s+\w+:/i,
+  /una\s+(explicacion|descripcion|afirmacion|confusion)\s+(concisa|parcial|comun)\s+(del?\s+)?concepto/i,
+  /^a\)\s*una\s+(explicacion|descripcion)/i,
+  /^b\)\s*una\s+(explicacion|descripcion)/i,
+  /^c\)\s*una\s+(explicacion|descripcion)/i,
+  /^d\)\s*una\s+(explicacion|descripcion)/i
+];
 
 export class LlmService {
   private static generationCache = new Map<string, CacheEntry>();
   private static readonly cacheMaxEntries = 100;
   private static readonly cachePruneBatch = 20;
   private static readonly openRouterTimeoutMs = 60_000;
+  private static readonly maxRetries = 2;
 
   private get cacheTtlMs() {
     return env.LLM_CACHE_TTL_SEC * 1000;
@@ -91,7 +109,8 @@ export class LlmService {
         provider: "openrouter",
         latencyMs: 0,
         firstQuestionLatencyMs: 0,
-        fromCache: true
+        fromCache: true,
+        generationAttempts: 0
       };
     }
 
@@ -115,273 +134,331 @@ export class LlmService {
         provider: "local",
         latencyMs: 0,
         firstQuestionLatencyMs: 0,
-        fromCache: false
+        fromCache: false,
+        generationAttempts: 0
       };
     }
 
-    const prompt = [
-      `Genera exactamente ${count} preguntas de opcion multiple sobre \"${topic}\".`,
-      `Dificultad: ${difficulty}.`,
-      "Formato de salida obligatorio: NDJSON (un objeto JSON valido por linea).",
-      "No uses markdown, no devuelvas arrays y no agregues texto adicional.",
-      "Todo el contenido visible para el usuario debe estar en espanol: questionText, options A/B/C/D, explanation y subtopic.",
-      "Si el tema llega en otro idioma, conserva el significado pero escribe la salida en espanol.",
-      "Distribuye la respuesta correcta entre A, B, C y D de forma equilibrada; no uses siempre la opcion A.",
-      "Evita palabras en ingles salvo nombres propios o terminos tecnicos inevitables.",
-      "Cada linea debe seguir este esquema JSON:",
-      '{"questionText":"...","options":{"A":"...","B":"...","C":"...","D":"..."},"correctOption":"A","explanation":"...","subtopic":"..."}'
-    ].join("\n");
+    let allEmitted: LlmQuestion[] = [];
+    let generationAttempts = 0;
+    let currentModel = env.OPENROUTER_MODEL_PRIMARY;
+    let lastError: Error | null = null;
+
+    const tryGenerateWithModel = async (
+      model: string,
+      attemptTopic: string,
+      attemptDifficulty: Difficulty,
+      attemptCount: number
+    ): Promise<LlmQuestion[]> => {
+      generationAttempts++;
+      const result = await this.generateWithModel(
+        model,
+        attemptTopic,
+        attemptDifficulty,
+        attemptCount,
+        onQuestion
+      );
+      return result;
+    };
+
+    try {
+      allEmitted = await tryGenerateWithModel(
+        env.OPENROUTER_MODEL_PRIMARY,
+        topic,
+        difficulty,
+        count
+      );
+
+      if (allEmitted.length < count && env.OPENROUTER_MODEL_FALLBACK) {
+        logger.warn(
+          { topic, primaryCount: allEmitted.length, needed: count },
+          "Primary model insufficient, trying fallback"
+        );
+        const missing = count - allEmitted.length;
+        const fallbackQuestions = await tryGenerateWithModel(
+          env.OPENROUTER_MODEL_FALLBACK,
+          topic,
+          difficulty,
+          missing
+        );
+        allEmitted = [...allEmitted, ...fallbackQuestions];
+        currentModel = `${env.OPENROUTER_MODEL_PRIMARY} + ${env.OPENROUTER_MODEL_FALLBACK}`;
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      logger.error({ err: lastError, topic, difficulty, count }, "LLM generation failed");
+    }
+
+    if (allEmitted.length === 0) {
+      throw new Error(
+        lastError?.message || "No se pudieron generar preguntas de calidad. Por favor intenta de nuevo."
+      );
+    }
+
+    const finalQuestions = allEmitted.slice(0, count);
+    LlmService.generationCache.set(cacheKey, {
+      createdAt: Date.now(),
+      questions: finalQuestions
+    });
+    this.pruneGenerationCache();
+
+    return {
+      output: { questions: finalQuestions },
+      model: currentModel,
+      provider: "openrouter",
+      latencyMs: 0,
+      firstQuestionLatencyMs: 0,
+      fromCache: false,
+      generationAttempts
+    };
+  }
+
+  private async generateWithModel(
+    model: string,
+    topic: string,
+    difficulty: Difficulty,
+    count: number,
+    onQuestion: (question: LlmQuestion) => Promise<void>
+  ): Promise<LlmQuestion[]> {
+    const prompt = this.buildQualityPrompt(topic, difficulty, count);
 
     const body = {
-      model: env.OPENROUTER_MODEL_PRIMARY,
+      model,
       messages: [
         {
           role: "system",
-          content:
-            "Eres un motor de generacion de quizzes. Siempre produces NDJSON estricto con un objeto JSON valido por linea. Debes escribir en espanol la pregunta, opciones, explicacion y subtema."
+          content: this.buildSystemPrompt()
         },
         {
           role: "user",
           content: prompt
         }
       ],
-      temperature: 0.2,
+      temperature: 0.3,
       stream: true
     };
 
     const startTime = Date.now();
     let firstQuestionLatencyMs: number | undefined;
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      controller.abort();
+    }, LlmService.openRouterTimeoutMs);
+
+    let response: Response;
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => {
-        controller.abort();
-      }, LlmService.openRouterTimeoutMs);
-
-      let response: Response;
-      try {
-        response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
-            "Content-Type": "application/json",
-            "HTTP-Referer": env.OPENROUTER_SITE_URL,
-            "X-Title": env.OPENROUTER_SITE_NAME
-          },
-          body: JSON.stringify(body),
-          signal: controller.signal
-        });
-      } finally {
-        clearTimeout(timeout);
-      }
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`OpenRouter error (${response.status}): ${errorText || response.statusText}`);
-      }
-
-      if (!response.body) {
-        throw new Error("OpenRouter response stream is empty");
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-
-      let sseBuffer = "";
-      let contentBuffer = "";
-      let fullContent = "";
-
-      let model = env.OPENROUTER_MODEL_PRIMARY;
-      let promptTokens: number | undefined;
-      let completionTokens: number | undefined;
-
-      const emitted: LlmQuestion[] = [];
-      const emittedSignatures = new Set<string>();
-
-      const emitQuestion = async (question: LlmQuestion) => {
-        if (emitted.length >= count) return;
-
-        const signature = this.questionSignature(question);
-        if (emittedSignatures.has(signature)) return;
-
-        emittedSignatures.add(signature);
-
-        const randomizedQuestion = this.randomizeQuestionOptions(question);
-        emitted.push(randomizedQuestion);
-
-        if (firstQuestionLatencyMs === undefined) {
-          firstQuestionLatencyMs = Date.now() - startTime;
-        }
-
-        await onQuestion(randomizedQuestion);
-      };
-
-      const drainNdjsonBuffer = async () => {
-        while (true) {
-          const newlineIndex = contentBuffer.indexOf("\n");
-          if (newlineIndex === -1) break;
-
-          const rawLine = contentBuffer.slice(0, newlineIndex);
-          contentBuffer = contentBuffer.slice(newlineIndex + 1);
-
-          const maybeQuestion = this.parseQuestionLine(rawLine);
-          if (maybeQuestion) {
-            await emitQuestion(maybeQuestion);
-          }
-        }
-      };
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        sseBuffer += decoder.decode(value, { stream: true });
-        const rawEvents = sseBuffer.split("\n\n");
-        sseBuffer = rawEvents.pop() ?? "";
-
-        for (const rawEvent of rawEvents) {
-          const dataLines = rawEvent
-            .split("\n")
-            .filter((line) => line.startsWith("data:"))
-            .map((line) => line.slice(5).trim());
-
-          if (dataLines.length === 0) continue;
-
-          const dataPayload = dataLines.join("\n");
-          if (dataPayload === "[DONE]") continue;
-
-          let parsedChunk: OpenRouterChunk;
-          try {
-            parsedChunk = JSON.parse(dataPayload) as OpenRouterChunk;
-          } catch {
-            continue;
-          }
-
-          if (parsedChunk.model) {
-            model = parsedChunk.model;
-          }
-
-          if (parsedChunk.usage) {
-            promptTokens = parsedChunk.usage.prompt_tokens;
-            completionTokens = parsedChunk.usage.completion_tokens;
-          }
-
-          const textDelta =
-            parsedChunk.choices?.[0]?.delta?.content ??
-            parsedChunk.choices?.[0]?.message?.content ??
-            "";
-
-          if (!textDelta) continue;
-
-          contentBuffer += textDelta;
-          fullContent += textDelta;
-          await drainNdjsonBuffer();
-        }
-      }
-
-      const tailQuestion = this.parseQuestionLine(contentBuffer);
-      if (tailQuestion) {
-        await emitQuestion(tailQuestion);
-      }
-
-      if (emitted.length < count) {
-        const recovered = this.recoverQuestions(fullContent);
-        for (const question of recovered) {
-          await emitQuestion(question);
-          if (emitted.length >= count) break;
-        }
-      }
-
-      if (emitted.length < count) {
-        const fallbackQuestions = this.buildFallbackQuestions(
-          topic,
-          difficulty,
-          count - emitted.length,
-          emitted.length + 1
-        );
-
-        for (const question of fallbackQuestions) {
-          await emitQuestion(question);
-          if (emitted.length >= count) break;
-        }
-      }
-
-      if (emitted.length === 0) {
-        throw new Error("No valid questions received from model stream");
-      }
-
-      const finalQuestions = emitted.slice(0, count);
-      LlmService.generationCache.set(cacheKey, {
-        createdAt: Date.now(),
-        questions: finalQuestions
+      response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": env.OPENROUTER_SITE_URL,
+          "X-Title": env.OPENROUTER_SITE_NAME
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal
       });
-      this.pruneGenerationCache();
-
-      return {
-        output: { questions: finalQuestions },
-        model,
-        provider: "openrouter",
-        latencyMs: Date.now() - startTime,
-        firstQuestionLatencyMs,
-        promptTokens,
-        completionTokens,
-        fromCache: false
-      };
-    } catch (err) {
-      logger.error({ err, topic, difficulty, count }, "LLM streaming generation failed");
-
-      const staleCache = this.getCachedQuestions(topic, difficulty, count, true);
-      if (staleCache && staleCache.length > 0) {
-        const servedQuestions = staleCache
-          .slice(0, count)
-          .map((question) => this.randomizeQuestionOptions(question));
-
-        for (const question of servedQuestions) {
-          await onQuestion(question);
-        }
-
-        return {
-          output: { questions: servedQuestions },
-          model: env.OPENROUTER_MODEL_PRIMARY,
-          provider: "openrouter",
-          latencyMs: Date.now() - startTime,
-          fromCache: true
-        };
-      }
-
-      const fallbackQuestions = this.buildFallbackQuestions(topic, difficulty, count).map((question) =>
-        this.randomizeQuestionOptions(question)
-      );
-      for (const question of fallbackQuestions) {
-        await onQuestion(question);
-      }
-
-      LlmService.generationCache.set(cacheKey, {
-        createdAt: Date.now(),
-        questions: fallbackQuestions
-      });
-      this.pruneGenerationCache();
-
-      return {
-        output: { questions: fallbackQuestions },
-        model: "fallback/local",
-        provider: "local",
-        latencyMs: Date.now() - startTime,
-        fromCache: false
-      };
+    } finally {
+      clearTimeout(timeout);
     }
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`OpenRouter error (${response.status}): ${errorText || response.statusText}`);
+    }
+
+    if (!response.body) {
+      throw new Error("OpenRouter response stream is empty");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    let sseBuffer = "";
+    let contentBuffer = "";
+    let fullContent = "";
+
+    let promptTokens: number | undefined;
+    let completionTokens: number | undefined;
+
+    const emitted: LlmQuestion[] = [];
+    const emittedSignatures = new Set<string>();
+
+    const emitQuestion = async (question: LlmQuestion) => {
+      if (!this.isQualityQuestion(question)) {
+        logger.warn({ question: question.questionText }, "Question failed quality gate");
+        return;
+      }
+
+      const signature = this.questionSignature(question);
+      if (emittedSignatures.has(signature)) return;
+
+      emittedSignatures.add(signature);
+
+      const randomizedQuestion = this.randomizeQuestionOptions(question);
+      emitted.push(randomizedQuestion);
+
+      if (firstQuestionLatencyMs === undefined) {
+        firstQuestionLatencyMs = Date.now() - startTime;
+      }
+
+      await onQuestion(randomizedQuestion);
+    };
+
+    const drainNdjsonBuffer = async () => {
+      while (true) {
+        const newlineIndex = contentBuffer.indexOf("\n");
+        if (newlineIndex === -1) break;
+
+        const rawLine = contentBuffer.slice(0, newlineIndex);
+        contentBuffer = contentBuffer.slice(newlineIndex + 1);
+
+        const maybeQuestion = this.parseQuestionLine(rawLine);
+        if (maybeQuestion) {
+          await emitQuestion(maybeQuestion);
+        }
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      sseBuffer += decoder.decode(value, { stream: true });
+      const rawEvents = sseBuffer.split("\n\n");
+      sseBuffer = rawEvents.pop() ?? "";
+
+      for (const rawEvent of rawEvents) {
+        const dataLines = rawEvent
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trim());
+
+        if (dataLines.length === 0) continue;
+
+        const dataPayload = dataLines.join("\n");
+        if (dataPayload === "[DONE]") continue;
+
+        let parsedChunk: OpenRouterChunk;
+        try {
+          parsedChunk = JSON.parse(dataPayload) as OpenRouterChunk;
+        } catch {
+          continue;
+        }
+
+        if (parsedChunk.usage) {
+          promptTokens = parsedChunk.usage.prompt_tokens;
+          completionTokens = parsedChunk.usage.completion_tokens;
+        }
+
+        const textDelta =
+          parsedChunk.choices?.[0]?.delta?.content ??
+          parsedChunk.choices?.[0]?.message?.content ??
+          "";
+
+        if (!textDelta) continue;
+
+        contentBuffer += textDelta;
+        fullContent += textDelta;
+        await drainNdjsonBuffer();
+      }
+    }
+
+    const tailQuestion = this.parseQuestionLine(contentBuffer);
+    if (tailQuestion) {
+      await emitQuestion(tailQuestion);
+    }
+
+    if (emitted.length < count) {
+      const recovered = this.recoverQuestions(fullContent);
+      for (const question of recovered) {
+        await emitQuestion(question);
+        if (emitted.length >= count) break;
+      }
+    }
+
+    return emitted;
+  }
+
+  private buildSystemPrompt(): string {
+    return `Eres un experto en crear preguntas de opción multiple de alta calidad para quizzes educativos.
+
+Tu objetivo es generar preguntas que:
+1. Sean precisas, claras y evalúen conocimiento real
+2. Tengas distractores (opciones incorrectas) plausibles y dentro del mismo dominio temático
+3. La explicación sea específica, indicando por qué la respuesta correcta es correcta Y por qué cada distractora es incorrecta
+4. Uses lenguaje natural y directo, no frases plantilla
+
+Ejemplo de pregunta BUENA:
+{
+  "questionText": "¿Cuál es la capital de Francia?",
+  "options": {
+    "A": "París",
+    "B": "Londres",
+    "C": "Berlín",
+    "D": "Madrid"
+  },
+  "correctOption": "A",
+  "explanation": "París es la capital de Francia desde el siglo X. Las otras opciones son capitales de otros países europeos: Londres (Reino Unido), Berlín (Alemania) y Madrid (España).",
+  "subtopic": "geografía europea"
+}
+
+Ejemplo de pregunta MALA (NO GENERES ESTO):
+{
+  "questionText": "concepto 1",
+  "options": {
+    "A": "una explicación concisa del concepto 1",
+    "B": "una descripción parcialmente correcta del concepto 1",
+    "C": "una afirmación no relacionada",
+    "D": "una confusión común"
+  },
+  "correctOption": "A",
+  "explanation": "La opción A es correcta porque sí.",
+  "subtopic": "general"
+}
+
+IMPORTANTE: 
+- NUNCA uses patrones como "concepto N", "afirmación resume mejor", "opción A/B/C/D" en las opciones
+- Cada pregunta debe ser sobre un aspecto específico y concreto del tema
+- Los distractores deben ser respuestas que alguien con conocimiento parcial podría elegir plausiblemente
+- Toda la salida debe ser en español
+- Formato de salida: NDJSON (un objeto JSON válido por línea, SIN markdown)`;
+  }
+
+  private buildQualityPrompt(topic: string, difficulty: Difficulty, count: number): string {
+    const difficultyText: Record<Difficulty, string> = {
+      EASY: "básico - conceptos fundamentales, definiciones, datos concretos",
+      MEDIUM: "intermedio - aplicación de conceptos, relaciones entre ideas",
+      HARD: "avanzado - análisis crítico, resolución de problemas complejos"
+    };
+
+    return `Genera exactamente ${count} preguntas de opción multiple sobre "${topic}".
+
+DIFICULTAD: ${difficultyText[difficulty]}
+
+REGLAS OBLIGATORIAS:
+1. Cada pregunta debe evaluar un aspecto CONCRETO y ESPECÍFICO del tema "${topic}"
+2. Las opciones incorrectas (distractores) deben ser plausibles - respuestas que alguien con conocimiento parcial podría elegir
+3. La explicación debe ser detallada: explica por qué la correcta es correcta Y por qué cada distractora es incorrecta
+4. NO uses frases plantilla como "concepto 1", "afirmación resume mejor", etc.
+5. NO repitas el texto del tema en cada opción (ej: no pongas "${topic}" en todas las opciones)
+6. El subtopic debe ser un aspecto específico, no genérico
+
+FORMATO: NDJSON - un objeto JSON válido por línea, sin markdown, sin arrays, sin texto adicional.
+
+Ejemplo de formato exacto:
+{"questionText":"...","options":{"A":"...","B":"...","C":"...","D":"..."},"correctOption":"A","explanation":"...","subtopic":"..."}`;
   }
 
   private buildCacheKey(topic: string, difficulty: Difficulty, count: number): string {
     const normalizedTopic = topic.trim().toLowerCase().replace(/\s+/g, " ");
-    return `${normalizedTopic}::${difficulty}::${count}::es-v1`;
+    return `${normalizedTopic}::${difficulty}::${count}::es-v2-quality`;
   }
 
   private pruneGenerationCache() {
     const cache = LlmService.generationCache;
-    if (cache.size <= LlmService.cacheMaxEntries) {
-      return;
-    }
+    if (cache.size <= LlmService.cacheMaxEntries) return;
 
     const overflow = cache.size - LlmService.cacheMaxEntries;
     const pruneCount = Math.max(overflow, LlmService.cachePruneBatch);
@@ -429,12 +506,16 @@ export class LlmService {
       const asObject = JSON.parse(cleaned);
       const asLlmOutput = LlmOutputSchema.safeParse(asObject);
       if (asLlmOutput.success) {
-        return asLlmOutput.data.questions.filter((question) => this.isSpanishQuestion(question));
+        return asLlmOutput.data.questions.filter(
+          (question) => this.isSpanishQuestion(question) && this.isQualityQuestion(question)
+        );
       }
 
       const asQuestionArray = LlmQuestionSchema.array().safeParse(asObject);
       if (asQuestionArray.success) {
-        return asQuestionArray.data.filter((question) => this.isSpanishQuestion(question));
+        return asQuestionArray.data.filter(
+          (question) => this.isSpanishQuestion(question) && this.isQualityQuestion(question)
+        );
       }
     } catch {
       // Ignore and try line-based recovery below.
@@ -500,6 +581,47 @@ export class LlmService {
     ].join(" ");
 
     return this.isLikelySpanish(text);
+  }
+
+  private isQualityQuestion(question: LlmQuestion): boolean {
+    const fullText = [
+      question.questionText,
+      question.options.A,
+      question.options.B,
+      question.options.C,
+      question.options.D,
+      question.explanation
+    ].join(" ").toLowerCase();
+
+    for (const pattern of GENERIC_PATTERNS) {
+      if (pattern.test(fullText)) {
+        return false;
+      }
+    }
+
+    const minQuestionLength = 15;
+    if (question.questionText.length < minQuestionLength) {
+      return false;
+    }
+
+    const minOptionLength = 5;
+    const optionsText = [question.options.A, question.options.B, question.options.C, question.options.D].join(" ");
+    if (optionsText.length < minOptionLength * 4) {
+      return false;
+    }
+
+    const uniqueOptions = new Set([
+      question.options.A,
+      question.options.B,
+      question.options.C,
+      question.options.D
+    ].map((o) => o.toLowerCase().trim()));
+
+    if (uniqueOptions.size < 4) {
+      return false;
+    }
+
+    return true;
   }
 
   private isLikelySpanish(text: string): boolean {
@@ -582,17 +704,16 @@ export class LlmService {
     const base = Array.from({ length: count }, (_, index) => {
       const n = startIndex + index;
       return {
-        questionText: `(${levels[difficulty]}) ${topic}: ?Que afirmacion resume mejor el concepto ${n}?`,
+        questionText: `(${levels[difficulty]}) Pregunta de ejemplo ${n} sobre ${topic}`,
         options: {
-          A: `Una explicacion concisa y precisa del concepto ${n} de ${topic}.`,
-          B: `Una descripcion parcialmente correcta que omite contexto clave del concepto ${n}.`,
-          C: `Una afirmacion no relacionada que no aplica a ${topic}.`,
-          D: `Una confusion comun sobre el concepto ${n} de ${topic}.`
+          A: `Respuesta correcta de ejemplo para ${topic}`,
+          B: `Distractor plausible incorrecto sobre ${topic}`,
+          C: `Otra opción incorrecta relacionada con ${topic}`,
+          D: `Opción claramente incorrecta sobre ${topic}`
         },
         correctOption: "A" as const,
-        explanation:
-          "La opcion A ofrece la respuesta mas completa y precisa. Las demas opciones son incompletas, se alejan del tema o reflejan ideas equivocadas.",
-        subtopic: `Concepto central ${n}`
+        explanation: `Esta es una pregunta de ejemplo. En una implementación real, el modelo LLM debería generar contenido específico sobre ${topic}.`,
+        subtopic: `ejemplo ${n}`
       };
     });
 

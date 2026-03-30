@@ -598,6 +598,8 @@ export class SessionService {
         | Awaited<ReturnType<LlmService["generateQuestionsStream"]>>
         | undefined;
 
+      const createdQuestionIds: string[] = [];
+
       if (remainingCount > 0) {
         generationResult = await this.llmService.generateQuestionsStream(
           session.topic,
@@ -614,10 +616,14 @@ export class SessionService {
                 explanation: qData.explanation,
                 subtopic: qData.subtopic,
                 difficultyAssigned: round.requestedDifficulty,
-                generationModel: generationResult?.model ?? env.OPENROUTER_MODEL_PRIMARY,
+                generationModel: env.OPENROUTER_MODEL_PRIMARY,
                 promptVersion: "v2.ndjson"
               }
             });
+
+            // track created question ids so we can update the generationModel
+            // after the generation finishes and we know the actual model used
+            createdQuestionIds.push(savedQuestion.id);
 
             this.pushEvent(state, {
               event: "question",
@@ -641,6 +647,19 @@ export class SessionService {
             orderIndex += 1;
           }
         );
+
+        // If the generation used a different model than the primary, update
+        // the questions we just created to reflect the real model.
+        if (
+          generationResult?.model &&
+          createdQuestionIds.length > 0 &&
+          generationResult.model !== env.OPENROUTER_MODEL_PRIMARY
+        ) {
+          await prisma.question.updateMany({
+            where: { id: { in: createdQuestionIds } },
+            data: { generationModel: generationResult.model }
+          });
+        }
       }
 
       const generatedCount = orderIndex;

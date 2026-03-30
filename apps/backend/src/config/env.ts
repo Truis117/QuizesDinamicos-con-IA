@@ -40,7 +40,7 @@ const EnvSchema = z.object({
   OPENROUTER_API_KEY: z.string().optional(),
   OPENROUTER_MODEL_PRIMARY: z
     .string()
-    .default("meta-llama/llama-3.3-70b-instruct:free"),
+    .default("openrouter/free"),
   OPENROUTER_MODEL_FALLBACK: z
     .string()
     .default("qwen/qwen3-next-80b-a3b-instruct:free"),

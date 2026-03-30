@@ -3,11 +3,14 @@ import { api } from "../lib/apiClient";
 import { useQuizStream } from "../lib/useQuizStream";
 import { useSeo } from "../lib/seo";
 
+type DifficultyOption = "EASY" | "MEDIUM" | "HARD";
+
 type AnswerFeedback = {
   isCorrect: boolean;
   correctOption: string;
   explanation: string;
   selectedOption: string;
+  currentStreak: number;
 };
 
 type QuizQuestion = {
@@ -17,11 +20,34 @@ type QuizQuestion = {
   options: Record<string, string>;
 };
 
+const QUESTION_COUNTS = [5, 10, 15] as const;
+
+const DIFFICULTY_LABELS: Record<DifficultyOption, string> = {
+  EASY: "Facil",
+  MEDIUM: "Media",
+  HARD: "Dificil"
+};
+
 export function QuizRunner({ sessionId, onBack }: { sessionId: string; onBack: () => void }) {
-  const { questions, status, error, targetCount } = useQuizStream(sessionId);
+  const {
+    questions,
+    status,
+    error,
+    targetCount,
+    topic,
+    roundDifficulty,
+    recommendedDifficulty,
+    currentStreak,
+    restart
+  } = useQuizStream(sessionId);
+
   const [answers, setAnswers] = useState<Record<string, AnswerFeedback>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [streak, setStreak] = useState(0);
+  const [nextRoundCount, setNextRoundCount] = useState<(typeof QUESTION_COUNTS)[number]>(5);
+  const [nextRoundDifficulty, setNextRoundDifficulty] = useState<DifficultyOption>("MEDIUM");
+  const [isCreatingNextRound, setIsCreatingNextRound] = useState(false);
+  const [nextRoundError, setNextRoundError] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   useSeo({
@@ -30,6 +56,39 @@ export function QuizRunner({ sessionId, onBack }: { sessionId: string; onBack: (
     path: "/app",
     robots: "noindex,follow"
   });
+
+  useEffect(() => {
+    rootRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    setStreak(currentStreak);
+  }, [currentStreak]);
+
+  useEffect(() => {
+    if (status === "CONNECTING") {
+      setAnswers({});
+      setSubmitError(null);
+      setNextRoundError(null);
+    }
+  }, [status]);
+
+  useEffect(() => {
+    if (targetCount && QUESTION_COUNTS.includes(targetCount as (typeof QUESTION_COUNTS)[number])) {
+      setNextRoundCount(targetCount as (typeof QUESTION_COUNTS)[number]);
+    }
+  }, [targetCount]);
+
+  useEffect(() => {
+    if (recommendedDifficulty) {
+      setNextRoundDifficulty(recommendedDifficulty);
+      return;
+    }
+
+    if (roundDifficulty) {
+      setNextRoundDifficulty(roundDifficulty);
+    }
+  }, [recommendedDifficulty, roundDifficulty]);
 
   const handleAttempt = async (qId: string, option: string) => {
     try {
@@ -41,25 +100,47 @@ export function QuizRunner({ sessionId, onBack }: { sessionId: string; onBack: (
           selectedOption: option
         })
       });
-      setAnswers(prev => ({ ...prev, [qId]: { ...result.feedback, selectedOption: option } }));
-      
-      if (result.feedback.isCorrect) {
-        setStreak(s => s + 1);
-      } else {
-        setStreak(0);
-      }
 
+      setAnswers((prev) => ({
+        ...prev,
+        [qId]: { ...result.feedback, selectedOption: option }
+      }));
+      setStreak(result.feedback.currentStreak);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "No se pudo registrar la respuesta";
       setSubmitError(message);
     }
   };
 
-  const answeredCount = Object.keys(answers).length;
+  const handleStartNextRound = async () => {
+    if (isCreatingNextRound) {
+      return;
+    }
 
-  useEffect(() => {
-    rootRef.current?.focus();
-  }, []);
+    try {
+      setIsCreatingNextRound(true);
+      setNextRoundError(null);
+
+      await api.json(`/sessions/${sessionId}/rounds`, {
+        method: "POST",
+        body: JSON.stringify({
+          count: nextRoundCount,
+          difficulty: nextRoundDifficulty
+        })
+      });
+
+      setAnswers({});
+      setSubmitError(null);
+      restart();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "No se pudo iniciar la nueva ronda";
+      setNextRoundError(message);
+    } finally {
+      setIsCreatingNextRound(false);
+    }
+  };
+
+  const answeredCount = Object.keys(answers).length;
 
   const handleKeyboardChoice = (event: React.KeyboardEvent<HTMLElement>) => {
     const keyToOption: Record<string, string> = {
@@ -71,12 +152,13 @@ export function QuizRunner({ sessionId, onBack }: { sessionId: string; onBack: (
 
     const option = keyToOption[event.key];
     if (!option) return;
+    if (status === "DONE") return;
 
     const nextQuestion = questions.find((question) => !answers[question.id]);
     if (!nextQuestion) return;
 
     event.preventDefault();
-    handleAttempt(nextQuestion.id, option);
+    void handleAttempt(nextQuestion.id, option);
   };
 
   return (
@@ -86,29 +168,33 @@ export function QuizRunner({ sessionId, onBack }: { sessionId: string; onBack: (
       onKeyDown={handleKeyboardChoice}
       tabIndex={0}
     >
-      
-      {/* Top Header */}
       <header className="flex w-full items-center justify-between mb-8 gap-3">
-        <button 
+        <button
           onClick={onBack}
           className="text-white/60 hover:text-white px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 transition-colors border border-white/5"
         >
           ← Salir
         </button>
 
-        {/* Streak Counter */}
-        {streak > 0 && (
+        {streak > 0 ? (
           <div className="px-4 py-1.5 rounded-full bg-orange-500/10 border border-orange-500/20 text-orange-400 font-mono font-bold animate-pulse">
             🔥 Racha {streak}
           </div>
+        ) : (
+          <div className="px-4 py-1.5 rounded-full bg-white/5 border border-white/10 text-white/50 font-mono">
+            Racha 0
+          </div>
         )}
 
-        <div className="text-white/40 font-mono">
-          Sesion: {sessionId.slice(0, 8)}...
-        </div>
+        <div className="text-white/40 font-mono">Sesion: {sessionId.slice(0, 8)}...</div>
       </header>
 
-      {/* Global Errors */}
+      {topic && (
+        <div className="w-full mb-4 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white/70">
+          Tema actual: <span className="text-white">{topic}</span>
+        </div>
+      )}
+
       {error && (
         <div className="w-full mb-6 p-4 rounded-xl bg-danger/10 border border-danger/20 text-danger text-center shadow-lg">
           Error de conexion: {error}. Recarga o intenta de nuevo.
@@ -121,7 +207,6 @@ export function QuizRunner({ sessionId, onBack }: { sessionId: string; onBack: (
         </div>
       )}
 
-      {/* Status Bar */}
       <div className="w-full h-2 bg-white/5 rounded-full mb-8 overflow-hidden">
         {status === "CONNECTING" && (
           <div className="h-full bg-accent/50 w-1/4 animate-[pulse_2s_ease-in-out_infinite] rounded-full" />
@@ -142,10 +227,7 @@ export function QuizRunner({ sessionId, onBack }: { sessionId: string; onBack: (
         {targetCount ? ` / ${targetCount}` : ""} · Atajos: 1=A, 2=B, 3=C, 4=D
       </div>
 
-      {/* Questions Stack */}
       <div className="w-full space-y-8">
-        
-        {/* Skeleton Loader while connecting/generating */}
         {status === "CONNECTING" && questions.length === 0 && (
           <div className="w-full p-8 rounded-3xl bg-[var(--color-surface-glass)] backdrop-blur-md border border-white/5 animate-pulse">
             <div className="h-6 bg-white/10 rounded w-3/4 mb-8" />
@@ -163,8 +245,8 @@ export function QuizRunner({ sessionId, onBack }: { sessionId: string; onBack: (
           const isAnswered = !!answer;
 
           return (
-            <div 
-              key={q.id} 
+            <div
+              key={q.id}
               className={`w-full p-6 md:p-8 rounded-3xl bg-[var(--color-bg-elevated)] border border-white/10 shadow-2xl transition-all duration-300 gpu-layer ${
                 isAnswered ? "opacity-100" : "animate-in slide-in-from-bottom-4 fade-in"
               }`}
@@ -175,12 +257,10 @@ export function QuizRunner({ sessionId, onBack }: { sessionId: string; onBack: (
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {Object.entries(q.options).map(([key, value]) => {
-                  
-                  // Styling logic for options based on state
                   let btnStyle = "bg-white/5 border-white/10 hover:bg-white/10 hover:border-white/20 text-white";
                   if (isAnswered) {
                     if (answer.selectedOption === key) {
-                      btnStyle = answer.isCorrect 
+                      btnStyle = answer.isCorrect
                         ? "bg-success/20 border-success text-success shadow-[0_0_15px_rgba(16,185,129,0.3)]"
                         : "bg-danger/20 border-danger text-danger shadow-[0_0_15px_rgba(239,68,68,0.3)] animate-[quick-shake_220ms_ease-out_1]";
                     } else if (key === answer.correctOption) {
@@ -191,9 +271,11 @@ export function QuizRunner({ sessionId, onBack }: { sessionId: string; onBack: (
                   }
 
                   return (
-                    <button 
-                      key={key} 
-                      onClick={() => handleAttempt(q.id, key)}
+                    <button
+                      key={key}
+                      onClick={() => {
+                        void handleAttempt(q.id, key);
+                      }}
                       disabled={isAnswered}
                       className={`relative flex items-center p-4 rounded-2xl border text-left transition-all duration-150 ease-out select-none
                         ${!isAnswered ? "hover:scale-[0.98] active:scale-95 cursor-pointer" : "cursor-default"}
@@ -203,51 +285,111 @@ export function QuizRunner({ sessionId, onBack }: { sessionId: string; onBack: (
                       <span className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-full bg-white/10 text-sm font-bold font-mono mr-4">
                         {key}
                       </span>
-                      <span className="font-sans leading-tight text-lg">
-                        {value}
-                      </span>
+                      <span className="font-sans leading-tight text-lg">{value}</span>
                     </button>
                   );
                 })}
               </div>
 
-              {/* Feedback Slide-in Panel */}
               {answer && (
-                <div className={`mt-6 p-5 rounded-2xl border animate-in slide-in-from-top-2 fade-in ${
-                  answer.isCorrect 
-                    ? "bg-success/10 border-success/20 text-success-light" 
-                    : "bg-danger/10 border-danger/20 text-danger-light"
-                }`}>
+                <div
+                  className={`mt-6 p-5 rounded-2xl border animate-in slide-in-from-top-2 fade-in ${
+                    answer.isCorrect
+                      ? "bg-success/10 border-success/20 text-success-light"
+                      : "bg-danger/10 border-danger/20 text-danger-light"
+                  }`}
+                >
                   <div className="flex items-center gap-3 mb-2 font-heading font-bold text-lg">
                     {answer.isCorrect ? (
-                      <><span className="text-2xl">🎉</span> Correcto!</>
+                      <>
+                        <span className="text-2xl">🎉</span> Correcto!
+                      </>
                     ) : (
-                      <><span className="text-2xl">💡</span> Casi...</>
+                      <>
+                        <span className="text-2xl">💡</span> Casi...
+                      </>
                     )}
                   </div>
-                  <p className="text-white/80 leading-relaxed font-sans">
-                    {answer.explanation}
-                  </p>
+                  <p className="text-white/80 leading-relaxed font-sans">{answer.explanation}</p>
                 </div>
               )}
             </div>
           );
         })}
-        
-        {/* Completion State */}
+
         {status === "DONE" && (
-          <div className="w-full p-8 text-center rounded-3xl bg-accent/10 border border-accent/30 shadow-[0_0_40px_rgba(94,106,210,0.2)] animate-in zoom-in fade-in duration-500 mt-8">
-            <h2 className="text-3xl font-heading font-bold text-white mb-4">Ronda completada!</h2>
-            <p className="text-white/60 mb-8 text-lg">Ya respondiste todas las preguntas generadas.</p>
-            <button 
-              onClick={onBack}
-              className="px-8 py-4 rounded-xl bg-accent hover:bg-accent/90 text-white font-bold shadow-lg hover:shadow-accent/50 hover:scale-105 transition-all duration-200"
-            >
-              Empezar nueva ronda
-            </button>
+          <div className="w-full p-8 rounded-3xl bg-accent/10 border border-accent/30 shadow-[0_0_40px_rgba(94,106,210,0.2)] animate-in zoom-in fade-in duration-500 mt-8">
+            <h2 className="text-3xl font-heading font-bold text-white mb-2 text-center">Ronda completada!</h2>
+            <p className="text-white/60 mb-8 text-lg text-center">
+              Puedes continuar en el mismo tema sin volver al inicio.
+            </p>
+
+            {nextRoundError && (
+              <div className="mb-6 p-3 rounded-lg bg-danger/10 border border-danger/20 text-danger text-sm text-center">
+                {nextRoundError}
+              </div>
+            )}
+
+            <div className="grid gap-6 md:grid-cols-2 mb-8">
+              <div>
+                <p className="mb-3 text-sm text-white/60">Cantidad de preguntas</p>
+                <div className="flex gap-2">
+                  {QUESTION_COUNTS.map((count) => (
+                    <button
+                      key={count}
+                      onClick={() => setNextRoundCount(count)}
+                      className={`px-4 py-2 rounded-full border transition-all ${
+                        nextRoundCount === count
+                          ? "bg-accent/20 border-accent text-accent"
+                          : "bg-transparent border-white/10 text-white/60 hover:border-white/30 hover:text-white"
+                      }`}
+                    >
+                      {count}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <p className="mb-3 text-sm text-white/60">Dificultad</p>
+                <div className="flex gap-2 flex-wrap">
+                  {(["EASY", "MEDIUM", "HARD"] as DifficultyOption[]).map((difficulty) => (
+                    <button
+                      key={difficulty}
+                      onClick={() => setNextRoundDifficulty(difficulty)}
+                      className={`px-4 py-2 rounded-full border transition-all ${
+                        nextRoundDifficulty === difficulty
+                          ? "bg-accent/20 border-accent text-accent"
+                          : "bg-transparent border-white/10 text-white/60 hover:border-white/30 hover:text-white"
+                      }`}
+                    >
+                      {DIFFICULTY_LABELS[difficulty]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+              <button
+                onClick={() => {
+                  void handleStartNextRound();
+                }}
+                disabled={isCreatingNextRound}
+                className="px-8 py-4 rounded-xl bg-accent hover:bg-accent/90 text-white font-bold shadow-lg hover:shadow-accent/50 hover:scale-105 transition-all duration-200 disabled:opacity-60 disabled:pointer-events-none"
+              >
+                {isCreatingNextRound ? "Iniciando ronda..." : "Continuar en este tema"}
+              </button>
+
+              <button
+                onClick={onBack}
+                className="px-8 py-4 rounded-xl bg-white/5 hover:bg-white/10 text-white/90 font-semibold border border-white/10 transition-all duration-200"
+              >
+                Ir al dashboard
+              </button>
+            </div>
           </div>
         )}
-
       </div>
     </div>
   );

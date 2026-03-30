@@ -109,7 +109,8 @@ export const QuizStartedEventSchema = z.object({
   payload: z.object({
     topic: z.string(),
     difficulty: DifficultySchema,
-    questionCount: z.number().int().positive()
+    questionCount: z.number().int().positive(),
+    currentStreak: z.number().int().nonnegative()
   })
 });
 

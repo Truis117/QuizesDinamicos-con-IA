@@ -271,6 +271,17 @@ export class SessionService {
       throw new Error("Question not found");
     }
 
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        currentStreak: true
+      }
+    });
+
+    if (!user) {
+      throw new Error("User not found");
+    }
+
     const byAttemptId = await prisma.questionAttempt.findUnique({
       where: { attemptId: data.attemptId }
     });
@@ -282,7 +293,8 @@ export class SessionService {
           isCorrect: byAttemptId.isCorrect,
           correctOption: question.correctOption,
           explanation: question.explanation,
-          scoreDelta: byAttemptId.scoreDelta
+          scoreDelta: byAttemptId.scoreDelta,
+          currentStreak: user.currentStreak
         }
       };
     }
@@ -303,7 +315,8 @@ export class SessionService {
           isCorrect: existingForQuestion.isCorrect,
           correctOption: question.correctOption,
           explanation: question.explanation,
-          scoreDelta: existingForQuestion.scoreDelta
+          scoreDelta: existingForQuestion.scoreDelta,
+          currentStreak: user.currentStreak
         }
       };
     }
@@ -326,12 +339,25 @@ export class SessionService {
         }
       });
 
-      await tx.user.update({
+      const updatedUser = await tx.user.update({
         where: { id: userId },
-        data: {
-          globalScore: {
-            increment: scoreDelta
-          }
+        data: isCorrect
+          ? {
+              globalScore: {
+                increment: scoreDelta
+              },
+              currentStreak: {
+                increment: 1
+              }
+            }
+          : {
+              globalScore: {
+                increment: scoreDelta
+              },
+              currentStreak: 0
+            },
+        select: {
+          currentStreak: true
         }
       });
 
@@ -378,16 +404,20 @@ export class SessionService {
         });
       }
 
-      return attempt;
+      return {
+        attempt,
+        currentStreak: updatedUser.currentStreak
+      };
     });
 
     return {
-      attempt: result,
+      attempt: result.attempt,
       feedback: {
         isCorrect,
         correctOption: question.correctOption,
         explanation: question.explanation,
-        scoreDelta
+        scoreDelta,
+        currentStreak: result.currentStreak
       }
     };
   }
@@ -721,7 +751,12 @@ export class SessionService {
           id: true,
           topic: true,
           userId: true,
-          currentDifficulty: true
+          currentDifficulty: true,
+          user: {
+            select: {
+              currentStreak: true
+            }
+          }
         }
       }),
       prisma.quizRound.findUnique({
@@ -770,7 +805,8 @@ export class SessionService {
       payload: {
         topic: session.topic,
         difficulty: round.requestedDifficulty,
-        questionCount: round.requestedCount
+        questionCount: round.requestedCount,
+        currentStreak: session.user.currentStreak
       }
     });
 

@@ -1,15 +1,26 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { api } from "./apiClient";
 import { SseEvent } from "@quiz/contracts";
 
 type StreamQuestion = Extract<SseEvent, { event: "question" }>["payload"];
+type StreamDifficulty = Extract<SseEvent, { event: "quiz_started" }>["payload"]["difficulty"];
+type StreamStatus = "IDLE" | "CONNECTING" | "STREAMING" | "DONE" | "ERROR";
 
 export function useQuizStream(sessionId: string | null) {
   const [questions, setQuestions] = useState<StreamQuestion[]>([]);
-  const [status, setStatus] = useState<"IDLE" | "CONNECTING" | "STREAMING" | "DONE" | "ERROR">("IDLE");
+  const [status, setStatus] = useState<StreamStatus>("IDLE");
   const [error, setError] = useState<string | null>(null);
   const [targetCount, setTargetCount] = useState<number | null>(null);
+  const [topic, setTopic] = useState<string | null>(null);
+  const [roundDifficulty, setRoundDifficulty] = useState<StreamDifficulty | null>(null);
+  const [recommendedDifficulty, setRecommendedDifficulty] = useState<StreamDifficulty | null>(null);
+  const [currentStreak, setCurrentStreak] = useState(0);
+  const [streamNonce, setStreamNonce] = useState(0);
   const streamHadErrorRef = useRef(false);
+
+  const restart = useCallback(() => {
+    setStreamNonce((prev) => prev + 1);
+  }, []);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -18,6 +29,9 @@ export function useQuizStream(sessionId: string | null) {
     setError(null);
     setQuestions([]);
     setTargetCount(null);
+    setTopic(null);
+    setRoundDifficulty(null);
+    setRecommendedDifficulty(null);
     streamHadErrorRef.current = false;
 
     // We can't easily pass headers like Authorization to native EventSource.
@@ -79,11 +93,14 @@ export function useQuizStream(sessionId: string | null) {
     return () => {
       abortController.abort();
     };
-  }, [sessionId]);
+  }, [sessionId, streamNonce]);
 
   function handleEvent(event: SseEvent) {
     if (event.event === "quiz_started") {
       setTargetCount(event.payload.questionCount);
+      setTopic(event.payload.topic);
+      setRoundDifficulty(event.payload.difficulty);
+      setCurrentStreak(event.payload.currentStreak);
     } else if (event.event === "question") {
       setQuestions(prev => {
         // Dedup by orderIndex
@@ -95,9 +112,20 @@ export function useQuizStream(sessionId: string | null) {
       setError(event.payload.message);
       setStatus("ERROR");
     } else if (event.event === "round_done" && !streamHadErrorRef.current) {
+      setRecommendedDifficulty(event.payload.recommendedDifficulty);
       setStatus("DONE");
     }
   }
 
-  return { questions, status, error, targetCount };
+  return {
+    questions,
+    status,
+    error,
+    targetCount,
+    topic,
+    roundDifficulty,
+    recommendedDifficulty,
+    currentStreak,
+    restart
+  };
 }

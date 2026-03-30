@@ -35,6 +35,7 @@ model User {
   email          String            @unique
   passwordHash   String
   globalScore    Int               @default(0)
+  currentStreak  Int               @default(0)
   sessions       QuizSession[]
   attempts       QuestionAttempt[]
   subtopicMastery SubtopicMastery[]

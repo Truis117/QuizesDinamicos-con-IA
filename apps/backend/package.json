@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsup src/index.ts --format esm --dts",
-    "start:prod": "node ./scripts/prisma-with-db-url.mjs migrate deploy && node dist/index.js",
+    "start:prod": "node ./scripts/start-prod.mjs",
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prisma:generate": "node ./scripts/prisma-with-db-url.mjs generate",

@@ -29,6 +29,7 @@ type SeoPayload = {
 
 const rateLimitStore = new Map<string, RateCounter>();
 const sessionService = new SessionService();
+const PUBLIC_SSR_QUESTION_LIMIT = 10;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -42,11 +43,21 @@ type PublicSessionView = NonNullable<Awaited<ReturnType<SessionService["getPubli
 function buildRateKey(req: Request): string {
   const forwarded = req.header("x-forwarded-for");
   const ip = forwarded?.split(",")[0]?.trim() || req.ip || "unknown";
-  const user = req.userId || "anon";
-  return `${user}:${ip}`;
+  return ip;
+}
+
+function cleanupRateLimitStore() {
+  const now = Date.now();
+  for (const [key, counter] of rateLimitStore.entries()) {
+    if (counter.resetAt <= now) {
+      rateLimitStore.delete(key);
+    }
+  }
 }
 
 function apiRateLimiter(req: Request, res: Response, next: NextFunction) {
+  cleanupRateLimitStore();
+
   const key = buildRateKey(req);
   const now = Date.now();
   const windowMs = env.API_RATE_LIMIT_WINDOW_SEC * 1000;
@@ -154,11 +165,24 @@ function getFrontendTemplate() {
 }
 
 function renderPublicQuizRootHtml(session: PublicSessionView) {
-  const questions = session.rounds
-    .flatMap((round) => round.questions)
-    .sort((a, b) => a.orderIndex - b.orderIndex);
+  const orderedQuestions = session.rounds
+    .flatMap((round) =>
+      round.questions.map((question) => ({
+        question,
+        roundIndex: round.roundIndex
+      }))
+    )
+    .sort((a, b) => {
+      if (a.roundIndex !== b.roundIndex) {
+        return a.roundIndex - b.roundIndex;
+      }
+      return a.question.orderIndex - b.question.orderIndex;
+    })
+    .map((entry) => entry.question);
 
-  const cards = questions
+  const visibleQuestions = orderedQuestions.slice(0, PUBLIC_SSR_QUESTION_LIMIT);
+
+  const cards = visibleQuestions
     .map((question, index) => {
       const options = Object.entries(question.options as Record<string, string>)
         .map(
@@ -173,7 +197,7 @@ function renderPublicQuizRootHtml(session: PublicSessionView) {
 
   return `<section aria-label="Quiz publico"><h1>${escapeHtmlText(
     session.topic
-  )}</h1><p>${questions.length} preguntas generadas por IA.</p>${cards}</section>`;
+  )}</h1><p>${orderedQuestions.length} preguntas generadas por IA.</p>${cards}</section>`;
 }
 
 function renderFrontendWithSeo(payload: SeoPayload) {

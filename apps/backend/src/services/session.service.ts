@@ -86,7 +86,36 @@ export class SessionService {
     });
   }
 
-  async getPublicSession(sessionId: string) {
+  async getPublicSession(sessionId: string, includeAllRounds = false) {
+    const roundsSelect = {
+      where: {
+        questions: {
+          some: {}
+        }
+      },
+      orderBy: {
+        roundIndex: includeAllRounds ? "asc" : "desc"
+      },
+      ...(includeAllRounds ? {} : { take: 1 }),
+      select: {
+        id: true,
+        roundIndex: true,
+        requestedCount: true,
+        generatedCount: true,
+        status: true,
+        questions: {
+          orderBy: { orderIndex: "asc" },
+          select: {
+            id: true,
+            orderIndex: true,
+            questionText: true,
+            options: true,
+            difficultyAssigned: true
+          }
+        }
+      }
+    } as const;
+
     return prisma.quizSession.findFirst({
       where: {
         id: sessionId,
@@ -103,26 +132,7 @@ export class SessionService {
         topic: true,
         currentDifficulty: true,
         createdAt: true,
-        rounds: {
-          orderBy: { roundIndex: "asc" },
-          select: {
-            id: true,
-            roundIndex: true,
-            requestedCount: true,
-            generatedCount: true,
-            status: true,
-            questions: {
-              orderBy: { orderIndex: "asc" },
-              select: {
-                id: true,
-                orderIndex: true,
-                questionText: true,
-                options: true,
-                difficultyAssigned: true
-              }
-            }
-          }
-        }
+        rounds: roundsSelect
       }
     });
   }

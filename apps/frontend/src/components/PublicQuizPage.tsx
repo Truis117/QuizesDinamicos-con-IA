@@ -44,8 +44,14 @@ export function PublicQuizPage({ sessionId, onGoToApp }: { sessionId: string; on
   const questions = useMemo(() => {
     if (!payload) return [];
     return payload.rounds
-      .flatMap((round) => round.questions)
-      .sort((a, b) => a.orderIndex - b.orderIndex);
+      .flatMap((round) => round.questions.map((question) => ({ question, roundIndex: round.roundIndex })))
+      .sort((a, b) => {
+        if (a.roundIndex !== b.roundIndex) {
+          return a.roundIndex - b.roundIndex;
+        }
+        return a.question.orderIndex - b.question.orderIndex;
+      })
+      .map(({ question }) => question);
   }, [payload]);
 
   const topic = payload?.topic ?? "Quiz publico";

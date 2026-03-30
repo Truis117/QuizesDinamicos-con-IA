@@ -19,6 +19,10 @@ export function Dashboard({ onStartSession }: { onStartSession: (id: string) => 
   });
 
   const handleStart = async () => {
+    if (isLoading) {
+      return;
+    }
+
     if (!topic.trim()) {
       setError("Introduce un tema");
       return;

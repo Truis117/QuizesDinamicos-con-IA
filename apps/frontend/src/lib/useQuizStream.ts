@@ -1,12 +1,15 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { api } from "./apiClient";
 import { SseEvent } from "@quiz/contracts";
 
+type StreamQuestion = Extract<SseEvent, { event: "question" }>["payload"];
+
 export function useQuizStream(sessionId: string | null) {
-  const [questions, setQuestions] = useState<any[]>([]);
+  const [questions, setQuestions] = useState<StreamQuestion[]>([]);
   const [status, setStatus] = useState<"IDLE" | "CONNECTING" | "STREAMING" | "DONE" | "ERROR">("IDLE");
   const [error, setError] = useState<string | null>(null);
   const [targetCount, setTargetCount] = useState<number | null>(null);
+  const streamHadErrorRef = useRef(false);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -15,6 +18,7 @@ export function useQuizStream(sessionId: string | null) {
     setError(null);
     setQuestions([]);
     setTargetCount(null);
+    streamHadErrorRef.current = false;
 
     // We can't easily pass headers like Authorization to native EventSource.
     // For P0, we could use standard fetch and parse chunks, or just rely on a token in query param.
@@ -59,9 +63,12 @@ export function useQuizStream(sessionId: string | null) {
           }
         }
         
-        setStatus("DONE");
+        if (!streamHadErrorRef.current) {
+          setStatus("DONE");
+        }
       } catch (err: any) {
         if (err.name === "AbortError") return;
+        streamHadErrorRef.current = true;
         setError(err.message);
         setStatus("ERROR");
       }
@@ -84,9 +91,10 @@ export function useQuizStream(sessionId: string | null) {
         return [...prev, event.payload].sort((a, b) => a.orderIndex - b.orderIndex);
       });
     } else if (event.event === "error") {
+      streamHadErrorRef.current = true;
       setError(event.payload.message);
       setStatus("ERROR");
-    } else if (event.event === "round_done") {
+    } else if (event.event === "round_done" && !streamHadErrorRef.current) {
       setStatus("DONE");
     }
   }

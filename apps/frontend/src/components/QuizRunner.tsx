@@ -20,6 +20,7 @@ type QuizQuestion = {
 export function QuizRunner({ sessionId, onBack }: { sessionId: string; onBack: () => void }) {
   const { questions, status, error, targetCount } = useQuizStream(sessionId);
   const [answers, setAnswers] = useState<Record<string, AnswerFeedback>>({});
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [streak, setStreak] = useState(0);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -32,6 +33,7 @@ export function QuizRunner({ sessionId, onBack }: { sessionId: string; onBack: (
 
   const handleAttempt = async (qId: string, option: string) => {
     try {
+      setSubmitError(null);
       const result = await api.json(`/sessions/${sessionId}/questions/${qId}/attempt`, {
         method: "POST",
         body: JSON.stringify({
@@ -47,8 +49,9 @@ export function QuizRunner({ sessionId, onBack }: { sessionId: string; onBack: (
         setStreak(0);
       }
 
-    } catch (err: any) {
-      alert(err.message);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "No se pudo registrar la respuesta";
+      setSubmitError(message);
     }
   };
 
@@ -109,6 +112,12 @@ export function QuizRunner({ sessionId, onBack }: { sessionId: string; onBack: (
       {error && (
         <div className="w-full mb-6 p-4 rounded-xl bg-danger/10 border border-danger/20 text-danger text-center shadow-lg">
           Error de conexion: {error}. Recarga o intenta de nuevo.
+        </div>
+      )}
+
+      {submitError && (
+        <div className="w-full mb-6 p-4 rounded-xl bg-danger/10 border border-danger/20 text-danger text-center shadow-lg">
+          Error al enviar respuesta: {submitError}
         </div>
       )}
 

@@ -7,6 +7,7 @@ export const API_URL =
 export class ApiClient {
   private accessToken: string | null = null;
   private refreshToken: string | null = null;
+  private refreshPromise: Promise<{ accessToken: string; refreshToken: string }> | null = null;
 
   constructor() {
     this.refreshToken = localStorage.getItem("refresh_token");
@@ -31,6 +32,29 @@ export class ApiClient {
     return !!this.refreshToken;
   }
 
+  private async performRefresh(): Promise<{ accessToken: string; refreshToken: string }> {
+    if (!this.refreshToken) {
+      throw new Error("Session expired");
+    }
+
+    const refreshRes = await fetch(`${API_URL}/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refreshToken: this.refreshToken })
+    });
+
+    if (!refreshRes.ok) {
+      this.clearTokens();
+      throw new Error("Session expired");
+    }
+
+    const data = await refreshRes.json();
+    return {
+      accessToken: data.accessToken,
+      refreshToken: data.refreshToken
+    };
+  }
+
   async fetch(endpoint: string, options: RequestInit = {}): Promise<Response> {
     const headers = new Headers(options.headers);
     if (this.accessToken) {
@@ -43,21 +67,16 @@ export class ApiClient {
     let res = await fetch(`${API_URL}${endpoint}`, { ...options, headers });
 
     if (res.status === 401 && this.refreshToken) {
-      const refreshRes = await fetch(`${API_URL}/auth/refresh`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refreshToken: this.refreshToken }),
-      });
-
-      if (refreshRes.ok) {
-        const data = await refreshRes.json();
-        this.setTokens(data.accessToken, data.refreshToken);
-        headers.set("Authorization", `Bearer ${data.accessToken}`);
-        res = await fetch(`${API_URL}${endpoint}`, { ...options, headers });
-      } else {
-        this.clearTokens();
-        throw new Error("Session expired");
+      if (!this.refreshPromise) {
+        this.refreshPromise = this.performRefresh().finally(() => {
+          this.refreshPromise = null;
+        });
       }
+
+      const data = await this.refreshPromise;
+      this.setTokens(data.accessToken, data.refreshToken);
+      headers.set("Authorization", `Bearer ${data.accessToken}`);
+      res = await fetch(`${API_URL}${endpoint}`, { ...options, headers });
     }
 
     if (!res.ok) {

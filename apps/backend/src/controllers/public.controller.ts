@@ -6,7 +6,11 @@ export class PublicController {
 
   async getPublicSession(req: Request, res: Response, next: NextFunction) {
     try {
-      const session = await this.sessionService.getPublicSession(req.params.id as string);
+      const includeAllRounds = req.query.includeAllRounds === "true";
+      const session = await this.sessionService.getPublicSession(
+        req.params.id as string,
+        includeAllRounds
+      );
 
       if (!session) {
         res.status(404).json({ error: "Session not found" });

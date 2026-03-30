@@ -44,6 +44,9 @@ export type GenerateQuestionsResult = {
 
 export class LlmService {
   private static generationCache = new Map<string, CacheEntry>();
+  private static readonly cacheMaxEntries = 100;
+  private static readonly cachePruneBatch = 20;
+  private static readonly openRouterTimeoutMs = 60_000;
 
   private get cacheTtlMs() {
     return env.LLM_CACHE_TTL_SEC * 1000;
@@ -98,6 +101,7 @@ export class LlmService {
         createdAt: Date.now(),
         questions: fallbackQuestions
       });
+      this.pruneGenerationCache();
 
       return {
         output: { questions: fallbackQuestions },
@@ -138,16 +142,27 @@ export class LlmService {
     let firstQuestionLatencyMs: number | undefined;
 
     try {
-      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": env.OPENROUTER_SITE_URL,
-          "X-Title": env.OPENROUTER_SITE_NAME
-        },
-        body: JSON.stringify(body)
-      });
+      const controller = new AbortController();
+      const timeout = setTimeout(() => {
+        controller.abort();
+      }, LlmService.openRouterTimeoutMs);
+
+      let response: Response;
+      try {
+        response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+            "Content-Type": "application/json",
+            "HTTP-Referer": env.OPENROUTER_SITE_URL,
+            "X-Title": env.OPENROUTER_SITE_NAME
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -273,6 +288,7 @@ export class LlmService {
         createdAt: Date.now(),
         questions: finalQuestions
       });
+      this.pruneGenerationCache();
 
       return {
         output: { questions: finalQuestions },
@@ -311,6 +327,7 @@ export class LlmService {
         createdAt: Date.now(),
         questions: fallbackQuestions
       });
+      this.pruneGenerationCache();
 
       return {
         output: { questions: fallbackQuestions },
@@ -325,6 +342,20 @@ export class LlmService {
   private buildCacheKey(topic: string, difficulty: Difficulty, count: number): string {
     const normalizedTopic = topic.trim().toLowerCase().replace(/\s+/g, " ");
     return `${normalizedTopic}::${difficulty}::${count}`;
+  }
+
+  private pruneGenerationCache() {
+    const cache = LlmService.generationCache;
+    if (cache.size <= LlmService.cacheMaxEntries) {
+      return;
+    }
+
+    const overflow = cache.size - LlmService.cacheMaxEntries;
+    const pruneCount = Math.max(overflow, LlmService.cachePruneBatch);
+    const keysToDelete = Array.from(cache.keys()).slice(0, pruneCount);
+    for (const key of keysToDelete) {
+      cache.delete(key);
+    }
   }
 
   private parseQuestionLine(rawLine: string): LlmQuestion | null {

@@ -77,12 +77,16 @@ export class LlmService {
     const cacheKey = this.buildCacheKey(topic, difficulty, count);
     const cachedQuestions = this.getCachedQuestions(topic, difficulty, count);
     if (cachedQuestions && cachedQuestions.length >= count) {
-      for (const question of cachedQuestions.slice(0, count)) {
+      const servedQuestions = cachedQuestions
+        .slice(0, count)
+        .map((question) => this.randomizeQuestionOptions(question));
+
+      for (const question of servedQuestions) {
         await onQuestion(question);
       }
 
       return {
-        output: { questions: cachedQuestions.slice(0, count) },
+        output: { questions: servedQuestions },
         model: env.OPENROUTER_MODEL_PRIMARY,
         provider: "openrouter",
         latencyMs: 0,
@@ -92,7 +96,9 @@ export class LlmService {
     }
 
     if (!env.OPENROUTER_API_KEY) {
-      const fallbackQuestions = this.buildFallbackQuestions(topic, difficulty, count);
+      const fallbackQuestions = this.buildFallbackQuestions(topic, difficulty, count).map((question) =>
+        this.randomizeQuestionOptions(question)
+      );
       for (const question of fallbackQuestions) {
         await onQuestion(question);
       }
@@ -114,11 +120,15 @@ export class LlmService {
     }
 
     const prompt = [
-      `Generate exactly ${count} multiple-choice questions about "${topic}".`,
-      `Difficulty: ${difficulty}.`,
-      "Output format must be NDJSON (one JSON object per line).",
-      "Do not output markdown, arrays, or extra text.",
-      "Each line must match this JSON schema:",
+      `Genera exactamente ${count} preguntas de opcion multiple sobre \"${topic}\".`,
+      `Dificultad: ${difficulty}.`,
+      "Formato de salida obligatorio: NDJSON (un objeto JSON valido por linea).",
+      "No uses markdown, no devuelvas arrays y no agregues texto adicional.",
+      "Todo el contenido visible para el usuario debe estar en espanol: questionText, options A/B/C/D, explanation y subtopic.",
+      "Si el tema llega en otro idioma, conserva el significado pero escribe la salida en espanol.",
+      "Distribuye la respuesta correcta entre A, B, C y D de forma equilibrada; no uses siempre la opcion A.",
+      "Evita palabras en ingles salvo nombres propios o terminos tecnicos inevitables.",
+      "Cada linea debe seguir este esquema JSON:",
       '{"questionText":"...","options":{"A":"...","B":"...","C":"...","D":"..."},"correctOption":"A","explanation":"...","subtopic":"..."}'
     ].join("\n");
 
@@ -128,13 +138,14 @@ export class LlmService {
         {
           role: "system",
           content:
-            "You are a quiz generation engine. You always produce strict NDJSON with one valid JSON object per line."
+            "Eres un motor de generacion de quizzes. Siempre produces NDJSON estricto con un objeto JSON valido por linea. Debes escribir en espanol la pregunta, opciones, explicacion y subtema."
         },
         {
           role: "user",
           content: prompt
         }
       ],
+      temperature: 0.2,
       stream: true
     };
 
@@ -194,13 +205,15 @@ export class LlmService {
         if (emittedSignatures.has(signature)) return;
 
         emittedSignatures.add(signature);
-        emitted.push(question);
+
+        const randomizedQuestion = this.randomizeQuestionOptions(question);
+        emitted.push(randomizedQuestion);
 
         if (firstQuestionLatencyMs === undefined) {
           firstQuestionLatencyMs = Date.now() - startTime;
         }
 
-        await onQuestion(question);
+        await onQuestion(randomizedQuestion);
       };
 
       const drainNdjsonBuffer = async () => {
@@ -279,6 +292,20 @@ export class LlmService {
         }
       }
 
+      if (emitted.length < count) {
+        const fallbackQuestions = this.buildFallbackQuestions(
+          topic,
+          difficulty,
+          count - emitted.length,
+          emitted.length + 1
+        );
+
+        for (const question of fallbackQuestions) {
+          await emitQuestion(question);
+          if (emitted.length >= count) break;
+        }
+      }
+
       if (emitted.length === 0) {
         throw new Error("No valid questions received from model stream");
       }
@@ -305,12 +332,16 @@ export class LlmService {
 
       const staleCache = this.getCachedQuestions(topic, difficulty, count, true);
       if (staleCache && staleCache.length > 0) {
-        for (const question of staleCache.slice(0, count)) {
+        const servedQuestions = staleCache
+          .slice(0, count)
+          .map((question) => this.randomizeQuestionOptions(question));
+
+        for (const question of servedQuestions) {
           await onQuestion(question);
         }
 
         return {
-          output: { questions: staleCache.slice(0, count) },
+          output: { questions: servedQuestions },
           model: env.OPENROUTER_MODEL_PRIMARY,
           provider: "openrouter",
           latencyMs: Date.now() - startTime,
@@ -318,7 +349,9 @@ export class LlmService {
         };
       }
 
-      const fallbackQuestions = this.buildFallbackQuestions(topic, difficulty, count);
+      const fallbackQuestions = this.buildFallbackQuestions(topic, difficulty, count).map((question) =>
+        this.randomizeQuestionOptions(question)
+      );
       for (const question of fallbackQuestions) {
         await onQuestion(question);
       }
@@ -341,7 +374,7 @@ export class LlmService {
 
   private buildCacheKey(topic: string, difficulty: Difficulty, count: number): string {
     const normalizedTopic = topic.trim().toLowerCase().replace(/\s+/g, " ");
-    return `${normalizedTopic}::${difficulty}::${count}`;
+    return `${normalizedTopic}::${difficulty}::${count}::es-v1`;
   }
 
   private pruneGenerationCache() {
@@ -375,6 +408,7 @@ export class LlmService {
       const parsed = JSON.parse(normalized);
       const validated = LlmQuestionSchema.safeParse(parsed);
       if (!validated.success) return null;
+      if (!this.isSpanishQuestion(validated.data)) return null;
       return validated.data;
     } catch {
       return null;
@@ -395,12 +429,12 @@ export class LlmService {
       const asObject = JSON.parse(cleaned);
       const asLlmOutput = LlmOutputSchema.safeParse(asObject);
       if (asLlmOutput.success) {
-        return asLlmOutput.data.questions;
+        return asLlmOutput.data.questions.filter((question) => this.isSpanishQuestion(question));
       }
 
       const asQuestionArray = LlmQuestionSchema.array().safeParse(asObject);
       if (asQuestionArray.success) {
-        return asQuestionArray.data;
+        return asQuestionArray.data.filter((question) => this.isSpanishQuestion(question));
       }
     } catch {
       // Ignore and try line-based recovery below.
@@ -415,35 +449,150 @@ export class LlmService {
   }
 
   private questionSignature(question: LlmQuestion): string {
-    const options = `${question.options.A}|${question.options.B}|${question.options.C}|${question.options.D}`;
-    return `${question.questionText.trim().toLowerCase()}::${options.trim().toLowerCase()}`;
+    const optionValues = [
+      question.options.A,
+      question.options.B,
+      question.options.C,
+      question.options.D
+    ]
+      .map((value) => value.trim().toLowerCase())
+      .sort()
+      .join("|");
+
+    return `${question.questionText.trim().toLowerCase()}::${optionValues}`;
+  }
+
+  private randomizeQuestionOptions(question: LlmQuestion): LlmQuestion {
+    const optionSlots = ["A", "B", "C", "D"] as const;
+    const shuffled = optionSlots.map((key) => ({ key, text: question.options[key] }));
+
+    for (let i = shuffled.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+
+    const remappedOptions = {
+      A: shuffled[0].text,
+      B: shuffled[1].text,
+      C: shuffled[2].text,
+      D: shuffled[3].text
+    };
+
+    const remappedIndex = shuffled.findIndex((entry) => entry.key === question.correctOption);
+    const remappedCorrectOption = remappedIndex >= 0 ? optionSlots[remappedIndex] : question.correctOption;
+
+    return {
+      ...question,
+      options: remappedOptions,
+      correctOption: remappedCorrectOption
+    };
+  }
+
+  private isSpanishQuestion(question: LlmQuestion): boolean {
+    const text = [
+      question.questionText,
+      question.options.A,
+      question.options.B,
+      question.options.C,
+      question.options.D,
+      question.explanation,
+      question.subtopic
+    ].join(" ");
+
+    return this.isLikelySpanish(text);
+  }
+
+  private isLikelySpanish(text: string): boolean {
+    const words = text
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter(Boolean);
+
+    const englishMarkers = new Set([
+      "the",
+      "which",
+      "what",
+      "is",
+      "are",
+      "and",
+      "or",
+      "with",
+      "about",
+      "correct",
+      "incorrect",
+      "because",
+      "best",
+      "option",
+      "question",
+      "statement",
+      "true",
+      "false",
+      "answer"
+    ]);
+
+    const spanishMarkers = new Set([
+      "el",
+      "la",
+      "los",
+      "las",
+      "que",
+      "cual",
+      "es",
+      "son",
+      "y",
+      "o",
+      "con",
+      "sobre",
+      "correcta",
+      "incorrecta",
+      "porque",
+      "mejor",
+      "opcion",
+      "pregunta",
+      "afirmacion",
+      "verdadero",
+      "falso",
+      "respuesta"
+    ]);
+
+    let englishCount = 0;
+    let spanishCount = 0;
+
+    for (const word of words) {
+      if (englishMarkers.has(word)) englishCount += 1;
+      if (spanishMarkers.has(word)) spanishCount += 1;
+    }
+
+    if (englishCount === 0) return true;
+    return spanishCount >= englishCount;
   }
 
   private buildFallbackQuestions(
     topic: string,
     difficulty: Difficulty,
-    count: number
+    count: number,
+    startIndex = 1
   ): LlmQuestion[] {
     const levels: Record<Difficulty, string> = {
-      EASY: "introductory",
-      MEDIUM: "intermediate",
-      HARD: "advanced"
+      EASY: "introductorio",
+      MEDIUM: "intermedio",
+      HARD: "avanzado"
     };
 
     const base = Array.from({ length: count }, (_, index) => {
-      const n = index + 1;
+      const n = startIndex + index;
       return {
-        questionText: `(${levels[difficulty]}) ${topic}: Which statement best summarizes concept ${n}?`,
+        questionText: `(${levels[difficulty]}) ${topic}: ?Que afirmacion resume mejor el concepto ${n}?`,
         options: {
-          A: `A concise and accurate explanation of ${topic} concept ${n}.`,
-          B: `A partially correct description missing key context for concept ${n}.`,
-          C: `An unrelated claim that does not apply to ${topic}.`,
-          D: `A common misconception about ${topic} concept ${n}.`
+          A: `Una explicacion concisa y precisa del concepto ${n} de ${topic}.`,
+          B: `Una descripcion parcialmente correcta que omite contexto clave del concepto ${n}.`,
+          C: `Una afirmacion no relacionada que no aplica a ${topic}.`,
+          D: `Una confusion comun sobre el concepto ${n} de ${topic}.`
         },
         correctOption: "A" as const,
         explanation:
-          "Option A gives the most complete and precise answer. The other options are incomplete, off-topic, or reflect misconceptions.",
-        subtopic: `Core concept ${n}`
+          "La opcion A ofrece la respuesta mas completa y precisa. Las demas opciones son incompletas, se alejan del tema o reflejan ideas equivocadas.",
+        subtopic: `Concepto central ${n}`
       };
     });
 

@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useAuth } from "../lib/AuthContext";
 import { api } from "../lib/apiClient";
+import { useSeo } from "../lib/seo";
 
 export function Dashboard({ onStartSession }: { onStartSession: (id: string) => void }) {
   const { logout } = useAuth();
@@ -8,6 +9,14 @@ export function Dashboard({ onStartSession }: { onStartSession: (id: string) => 
   const [questionCount, setQuestionCount] = useState(5);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+
+  useSeo({
+    title: "Dashboard | QuizDinamico AI",
+    description:
+      "Crea una nueva sesion, elige un tema y genera preguntas con IA en segundos.",
+    path: "/app",
+    robots: "noindex,follow"
+  });
 
   const handleStart = async () => {
     if (!topic.trim()) {
@@ -50,10 +59,22 @@ export function Dashboard({ onStartSession }: { onStartSession: (id: string) => 
         </div>
 
         <div className="text-center mt-8 mb-10">
-          <h1 className="text-4xl md:text-5xl font-heading font-bold mb-4 bg-gradient-to-r from-white to-white/60 bg-clip-text text-transparent">
-            Que quieres aprender?
+          <h1 className="text-balance text-4xl md:text-5xl font-heading font-bold mb-4 bg-gradient-to-r from-white to-white/60 bg-clip-text text-transparent">
+            Que quieres aprender hoy?
           </h1>
           <p className="text-white/60">Genera un quiz con IA sobre cualquier tema en segundos.</p>
+        </div>
+
+        <div className="mb-8 flex flex-wrap justify-center gap-2">
+          {["Historia", "Python", "Anatomia", "Finanzas", "Geografia", "UX"].map((seed) => (
+            <button
+              key={seed}
+              onClick={() => setTopic(seed)}
+              className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-xs text-white/75 transition hover:border-white/30 hover:text-white"
+            >
+              {seed}
+            </button>
+          ))}
         </div>
 
         {error && (
@@ -65,7 +86,11 @@ export function Dashboard({ onStartSession }: { onStartSession: (id: string) => 
         <div className="space-y-8 max-w-xl mx-auto">
           {/* Large Topic Input */}
           <div className="relative">
+            <label htmlFor="topic-input" className="sr-only">
+              Tema del cuestionario
+            </label>
             <input 
+              id="topic-input"
               value={topic} 
               onChange={e => setTopic(e.target.value)} 
               placeholder="Ej: Imperio romano, React Hooks, Fisica cuantica" 

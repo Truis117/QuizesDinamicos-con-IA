@@ -1,0 +1,19 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="630" fill="#07080f"/>
+  <circle cx="930" cy="125" r="210" fill="#5E6AD2" fill-opacity="0.28"/>
+  <circle cx="210" cy="560" r="250" fill="#10B981" fill-opacity="0.18"/>
+  <rect x="120" y="120" width="960" height="390" rx="38" fill="#121427" fill-opacity="0.9"/>
+  <text x="180" y="250" fill="#F8FAFC" font-size="66" font-family="Poppins, Inter, sans-serif" font-weight="700">
+    QuizDinamico AI
+  </text>
+  <text x="180" y="330" fill="#CBD5E1" font-size="34" font-family="Inter, sans-serif" font-weight="500">
+    Cuestionarios adaptativos generados por IA
+  </text>
+  <text x="180" y="395" fill="#93C5FD" font-size="30" font-family="Inter, sans-serif" font-weight="500">
+    Aprende mas rapido con feedback en tiempo real
+  </text>
+  <rect x="180" y="435" width="300" height="52" rx="16" fill="#5E6AD2"/>
+  <text x="220" y="469" fill="#FFFFFF" font-size="25" font-family="Inter, sans-serif" font-weight="600">
+    Empieza gratis
+  </text>
+</svg>

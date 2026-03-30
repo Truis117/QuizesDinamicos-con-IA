@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useAuth } from "../lib/AuthContext";
 import { api } from "../lib/apiClient";
+import { useSeo } from "../lib/seo";
 
 export function Login() {
   const { login } = useAuth();
@@ -9,6 +10,19 @@ export function Login() {
   const [isRegister, setIsRegister] = useState(false);
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+
+  const emailLabel = "Correo electronico";
+  const passwordLabel = "Contrasena";
+
+  useSeo({
+    title: isRegister
+      ? "Crear cuenta | QuizDinamico AI"
+      : "Iniciar sesion | QuizDinamico AI",
+    description:
+      "Accede a tu panel para generar quizzes con IA, practicar y mejorar con dificultad adaptativa.",
+    path: "/login",
+    robots: "noindex,follow"
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -22,7 +36,7 @@ export function Login() {
       });
       login(data.accessToken, data.refreshToken);
     } catch (err: any) {
-      setError(err.message || "An error occurred");
+      setError(err.message || "Ocurrio un error");
     } finally {
       setIsLoading(false);
     }
@@ -32,7 +46,7 @@ export function Login() {
     <div className="flex min-h-[80vh] items-center justify-center p-4">
       <div className="w-full max-w-md p-8 rounded-2xl bg-[var(--color-surface-glass)] backdrop-blur-xl border border-white/10 shadow-2xl">
         <h2 className="text-3xl font-heading font-bold text-center mb-6">
-          {isRegister ? "Create Account" : "Welcome Back"}
+          {isRegister ? "Crea tu cuenta" : "Bienvenido de nuevo"}
         </h2>
         
         {error && (
@@ -43,8 +57,9 @@ export function Login() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-white/70 mb-1">Email</label>
+            <label htmlFor="email-input" className="block text-sm font-medium text-white/70 mb-1">{emailLabel}</label>
             <input 
+              id="email-input"
               type="email" 
               value={email} 
               onChange={e => setEmail(e.target.value)} 
@@ -54,8 +69,9 @@ export function Login() {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-white/70 mb-1">Password</label>
+            <label htmlFor="password-input" className="block text-sm font-medium text-white/70 mb-1">{passwordLabel}</label>
             <input 
+              id="password-input"
               type="password" 
               value={password} 
               onChange={e => setPassword(e.target.value)} 
@@ -70,7 +86,7 @@ export function Login() {
             disabled={isLoading}
             className="w-full py-3 mt-4 rounded-xl bg-accent hover:bg-accent/90 text-white font-semibold shadow-lg hover:shadow-accent/25 hover:scale-[0.98] active:scale-95 transition-all duration-150 disabled:opacity-50 disabled:pointer-events-none"
           >
-            {isLoading ? "Please wait..." : (isRegister ? "Register" : "Login")}
+            {isLoading ? "Un momento..." : (isRegister ? "Registrarme" : "Entrar")}
           </button>
         </form>
 
@@ -79,7 +95,7 @@ export function Login() {
             onClick={() => setIsRegister(!isRegister)}
             className="text-sm text-white/60 hover:text-white transition-colors duration-150"
           >
-            {isRegister ? "Already have an account? Login" : "Need an account? Register"}
+            {isRegister ? "Ya tienes cuenta? Inicia sesion" : "No tienes cuenta? Registrate"}
           </button>
         </div>
       </div>

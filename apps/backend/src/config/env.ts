@@ -32,6 +32,7 @@ const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().positive().default(3000),
   DATABASE_URL: z.string().url().default(resolvedDatabaseUrl),
+  PUBLIC_SITE_URL: z.string().url().default("http://localhost:3000"),
   FRONTEND_ORIGIN: z.string().url().default("http://localhost:5173"),
   JWT_ACCESS_SECRET: z.string().min(16).default("dev_access_secret_change_me_1234"),
   ACCESS_TOKEN_TTL: z.string().default("15m"),

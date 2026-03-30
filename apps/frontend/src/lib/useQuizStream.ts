@@ -1,13 +1,12 @@
-import { useState, useEffect, useRef } from "react";
-import { API_URL, api } from "./apiClient";
+import { useState, useEffect } from "react";
+import { api } from "./apiClient";
 import { SseEvent } from "@quiz/contracts";
 
 export function useQuizStream(sessionId: string | null) {
   const [questions, setQuestions] = useState<any[]>([]);
   const [status, setStatus] = useState<"IDLE" | "CONNECTING" | "STREAMING" | "DONE" | "ERROR">("IDLE");
   const [error, setError] = useState<string | null>(null);
-  
-  const eventSource = useRef<EventSource | null>(null);
+  const [targetCount, setTargetCount] = useState<number | null>(null);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -15,6 +14,7 @@ export function useQuizStream(sessionId: string | null) {
     setStatus("CONNECTING");
     setError(null);
     setQuestions([]);
+    setTargetCount(null);
 
     // We can't easily pass headers like Authorization to native EventSource.
     // For P0, we could use standard fetch and parse chunks, or just rely on a token in query param.
@@ -75,7 +75,9 @@ export function useQuizStream(sessionId: string | null) {
   }, [sessionId]);
 
   function handleEvent(event: SseEvent) {
-    if (event.event === "question") {
+    if (event.event === "quiz_started") {
+      setTargetCount(event.payload.questionCount);
+    } else if (event.event === "question") {
       setQuestions(prev => {
         // Dedup by orderIndex
         if (prev.some(q => q.orderIndex === event.payload.orderIndex)) return prev;
@@ -89,5 +91,5 @@ export function useQuizStream(sessionId: string | null) {
     }
   }
 
-  return { questions, status, error };
+  return { questions, status, error, targetCount };
 }

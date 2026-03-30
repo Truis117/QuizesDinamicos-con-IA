@@ -3,9 +3,13 @@
 @theme {
   --color-bg-base: #050506;
   --color-bg-elevated: #0a0a0c;
+  --color-bg-card: #111322;
   --color-accent: #5E6AD2;
+  --color-accent-light: #8fa0ff;
   --color-success: #10B981;
+  --color-success-light: #6ee7b7;
   --color-danger: #EF4444;
+  --color-danger-light: #fca5a5;
   --color-surface-glass: rgba(255, 255, 255, 0.05);
 
   --font-sans: "Inter", "Open Sans", ui-sans-serif, system-ui, sans-serif;
@@ -19,9 +23,77 @@
     color: #ffffff;
     font-family: var(--font-sans);
     margin: 0;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
 
   h1, h2, h3, h4, h5, h6 {
     font-family: var(--font-heading);
+  }
+
+  *:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(143, 160, 255, 0.95), 0 0 0 4px rgba(15, 23, 42, 0.85);
+  }
+
+  ::selection {
+    background-color: rgba(94, 106, 210, 0.32);
+    color: #ffffff;
+  }
+}
+
+@layer utilities {
+  .gpu-layer {
+    transform: translateZ(0);
+    will-change: transform;
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+@keyframes pulse-soft {
+  0% {
+    transform: scale(1);
+    opacity: 0.35;
+  }
+  50% {
+    transform: scale(1.07);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0.35;
+  }
+}
+
+@keyframes fade-up {
+  0% {
+    transform: translateY(10px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes quick-shake {
+  0% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-3px);
+  }
+  50% {
+    transform: translateX(3px);
+  }
+  75% {
+    transform: translateX(-2px);
+  }
+  100% {
+    transform: translateX(0);
   }
 }

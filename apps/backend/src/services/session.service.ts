@@ -323,8 +323,12 @@ export class SessionService {
 
     const isCorrect = question.correctOption === data.selectedOption;
     const scoreDelta = isCorrect ? 1 : -1;
-    const topic = question.round.session.topic;
+    const topic = question.round?.session?.topic;
     const subtopic = question.subtopic;
+
+    if (!topic) {
+      throw new Error("Session topic not found for question");
+    }
 
     const result = await prisma.$transaction(async (tx) => {
       const attempt = await tx.questionAttempt.create({
@@ -354,7 +358,9 @@ export class SessionService {
               globalScore: {
                 increment: scoreDelta
               },
-              currentStreak: 0
+              currentStreak: {
+                set: 0
+              }
             },
         select: {
           currentStreak: true
@@ -825,7 +831,7 @@ export class SessionService {
         topic: session.topic,
         difficulty: round.requestedDifficulty,
         questionCount: round.requestedCount,
-        currentStreak: session.user.currentStreak
+        currentStreak: session.user?.currentStreak ?? 0
       }
     });
 

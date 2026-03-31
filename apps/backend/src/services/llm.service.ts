@@ -13,7 +13,7 @@ type CacheEntry = {
   questions: LlmQuestion[];
 };
 
-type OpenRouterChunk = {
+type LlmChunk = {
   model?: string;
   usage?: {
     prompt_tokens?: number;
@@ -29,6 +29,13 @@ type OpenRouterChunk = {
     };
     finish_reason?: string | null;
   }>;
+};
+
+type ProviderConfig = {
+  url: string;
+  headers: Record<string, string>;
+  model: string;
+  providerName: string;
 };
 
 export type GenerateQuestionsResult = {
@@ -63,7 +70,7 @@ export class LlmService {
   private static generationCache = new Map<string, CacheEntry>();
   private static readonly cacheMaxEntries = 100;
   private static readonly cachePruneBatch = 20;
-  private static readonly openRouterTimeoutMs = 60_000;
+  private static readonly llmTimeoutMs = 60_000;
   private static readonly maxRetries = 2;
 
   private get cacheTtlMs() {
@@ -114,7 +121,7 @@ export class LlmService {
       };
     }
 
-    if (!env.OPENROUTER_API_KEY) {
+    if (!env.OPENROUTER_API_KEY && !env.CEREBRAS_API_KEY) {
       const fallbackQuestions = this.buildFallbackQuestions(topic, difficulty, count).map((question) =>
         this.randomizeQuestionOptions(question)
       );
@@ -142,51 +149,74 @@ export class LlmService {
     let allEmitted: LlmQuestion[] = [];
     let generationAttempts = 0;
     let currentModel = env.OPENROUTER_MODEL_PRIMARY;
+    let currentProvider = "openrouter";
     let lastError: Error | null = null;
 
-    const tryGenerateWithModel = async (
-      model: string,
-      attemptTopic: string,
-      attemptDifficulty: Difficulty,
-      attemptCount: number
-    ): Promise<LlmQuestion[]> => {
-      generationAttempts++;
-      const result = await this.generateWithModel(
-        model,
-        attemptTopic,
-        attemptDifficulty,
-        attemptCount,
-        onQuestion
-      );
-      return result;
-    };
-
-    try {
-      allEmitted = await tryGenerateWithModel(
-        env.OPENROUTER_MODEL_PRIMARY,
-        topic,
-        difficulty,
-        count
-      );
-
-      if (allEmitted.length < count && env.OPENROUTER_MODEL_FALLBACK) {
-        logger.warn(
-          { topic, primaryCount: allEmitted.length, needed: count },
-          "Primary model insufficient, trying fallback"
-        );
-        const missing = count - allEmitted.length;
-        const fallbackQuestions = await tryGenerateWithModel(
-          env.OPENROUTER_MODEL_FALLBACK,
+    // ── Step 1: OpenRouter primary ─────────────────────────────────────────
+    if (env.OPENROUTER_API_KEY && allEmitted.length < count) {
+      try {
+        generationAttempts++;
+        logger.info({ topic, model: env.OPENROUTER_MODEL_PRIMARY }, "Trying OpenRouter primary");
+        const questions = await this.generateWithProvider(
+          this.openRouterConfig(env.OPENROUTER_MODEL_PRIMARY),
           topic,
           difficulty,
-          missing
+          count,
+          onQuestion
         );
-        allEmitted = [...allEmitted, ...fallbackQuestions];
-        currentModel = `${env.OPENROUTER_MODEL_PRIMARY} + ${env.OPENROUTER_MODEL_FALLBACK}`;
+        allEmitted = [...allEmitted, ...questions];
+        currentModel = env.OPENROUTER_MODEL_PRIMARY;
+        currentProvider = "openrouter";
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        logger.warn({ err: lastError, topic }, "OpenRouter primary failed");
       }
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      logger.error({ err: lastError, topic, difficulty, count }, "LLM generation failed");
+    }
+
+    // ── Step 2: Cerebras (middle fallback) ────────────────────────────────
+    if (env.CEREBRAS_API_KEY && allEmitted.length < count) {
+      const missing = count - allEmitted.length;
+      try {
+        generationAttempts++;
+        logger.info({ topic, model: env.CEREBRAS_MODEL, missing }, "Trying Cerebras fallback");
+        const questions = await this.generateWithProvider(
+          this.cerebrasConfig(),
+          topic,
+          difficulty,
+          missing,
+          onQuestion
+        );
+        allEmitted = [...allEmitted, ...questions];
+        currentModel = allEmitted.length > questions.length
+          ? `${currentModel} + cerebras/${env.CEREBRAS_MODEL}`
+          : `cerebras/${env.CEREBRAS_MODEL}`;
+        currentProvider = allEmitted.length > questions.length ? "mixed" : "cerebras";
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        logger.warn({ err: lastError, topic }, "Cerebras fallback failed");
+      }
+    }
+
+    // ── Step 3: OpenRouter fallback model ─────────────────────────────────
+    if (env.OPENROUTER_API_KEY && env.OPENROUTER_MODEL_FALLBACK && allEmitted.length < count) {
+      const missing = count - allEmitted.length;
+      try {
+        generationAttempts++;
+        logger.info({ topic, model: env.OPENROUTER_MODEL_FALLBACK, missing }, "Trying OpenRouter fallback model");
+        const questions = await this.generateWithProvider(
+          this.openRouterConfig(env.OPENROUTER_MODEL_FALLBACK),
+          topic,
+          difficulty,
+          missing,
+          onQuestion
+        );
+        allEmitted = [...allEmitted, ...questions];
+        currentModel = `${currentModel} + ${env.OPENROUTER_MODEL_FALLBACK}`;
+        currentProvider = "mixed";
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        logger.warn({ err: lastError, topic }, "OpenRouter fallback model failed");
+      }
     }
 
     if (allEmitted.length === 0) {
@@ -205,7 +235,7 @@ export class LlmService {
     return {
       output: { questions: finalQuestions },
       model: currentModel,
-      provider: "openrouter",
+      provider: currentProvider,
       latencyMs: 0,
       firstQuestionLatencyMs: 0,
       fromCache: false,
@@ -213,8 +243,38 @@ export class LlmService {
     };
   }
 
-  private async generateWithModel(
-    model: string,
+  // ── Provider configs ──────────────────────────────────────────────────────
+
+  private openRouterConfig(model: string): ProviderConfig {
+    return {
+      url: "https://openrouter.ai/api/v1/chat/completions",
+      headers: {
+        Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": env.OPENROUTER_SITE_URL,
+        "X-Title": env.OPENROUTER_SITE_NAME
+      },
+      model,
+      providerName: "openrouter"
+    };
+  }
+
+  private cerebrasConfig(): ProviderConfig {
+    return {
+      url: "https://api.cerebras.ai/v1/chat/completions",
+      headers: {
+        Authorization: `Bearer ${env.CEREBRAS_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      model: env.CEREBRAS_MODEL,
+      providerName: "cerebras"
+    };
+  }
+
+  // ── Core streaming + parsing (shared across providers) ───────────────────
+
+  private async generateWithProvider(
+    config: ProviderConfig,
     topic: string,
     difficulty: Difficulty,
     count: number,
@@ -223,7 +283,7 @@ export class LlmService {
     const prompt = this.buildQualityPrompt(topic, difficulty, count);
 
     const body = {
-      model,
+      model: config.model,
       messages: [
         {
           role: "system",
@@ -234,8 +294,9 @@ export class LlmService {
           content: prompt
         }
       ],
-      temperature: 0.3,
-      stream: true
+      temperature: 0.4,
+      stream: true,
+      max_tokens: Math.min(count * 380, 4096)
     };
 
     const startTime = Date.now();
@@ -244,18 +305,13 @@ export class LlmService {
     const controller = new AbortController();
     const timeout = setTimeout(() => {
       controller.abort();
-    }, LlmService.openRouterTimeoutMs);
+    }, LlmService.llmTimeoutMs);
 
     let response: Response;
     try {
-      response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      response = await fetch(config.url, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": env.OPENROUTER_SITE_URL,
-          "X-Title": env.OPENROUTER_SITE_NAME
-        },
+        headers: config.headers,
         body: JSON.stringify(body),
         signal: controller.signal
       });
@@ -265,11 +321,11 @@ export class LlmService {
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`OpenRouter error (${response.status}): ${errorText || response.statusText}`);
+      throw new Error(`${config.providerName} error (${response.status}): ${errorText || response.statusText}`);
     }
 
     if (!response.body) {
-      throw new Error("OpenRouter response stream is empty");
+      throw new Error(`${config.providerName} response stream is empty`);
     }
 
     const reader = response.body.getReader();
@@ -301,6 +357,10 @@ export class LlmService {
 
       if (firstQuestionLatencyMs === undefined) {
         firstQuestionLatencyMs = Date.now() - startTime;
+        logger.info(
+          { provider: config.providerName, firstQuestionLatencyMs },
+          "First question received"
+        );
       }
 
       await onQuestion(randomizedQuestion);
@@ -340,9 +400,9 @@ export class LlmService {
         const dataPayload = dataLines.join("\n");
         if (dataPayload === "[DONE]") continue;
 
-        let parsedChunk: OpenRouterChunk;
+        let parsedChunk: LlmChunk;
         try {
-          parsedChunk = JSON.parse(dataPayload) as OpenRouterChunk;
+          parsedChunk = JSON.parse(dataPayload) as LlmChunk;
         } catch {
           continue;
         }
@@ -381,79 +441,73 @@ export class LlmService {
     return emitted;
   }
 
+  // ── Prompts ───────────────────────────────────────────────────────────────
+
   private buildSystemPrompt(): string {
-    return `Eres un experto en crear preguntas de opción multiple de alta calidad para quizzes educativos.
+    return `Eres un experto en crear preguntas de opción múltiple de alta calidad para quizzes educativos en español.
 
-Tu objetivo es generar preguntas que:
+Genera preguntas que:
 1. Sean precisas, claras y evalúen conocimiento real
-2. Tengas distractores (opciones incorrectas) plausibles y dentro del mismo dominio temático
-3. La explicación sea específica, indicando por qué la respuesta correcta es correcta Y por qué cada distractora es incorrecta
-4. Uses lenguaje natural y directo, no frases plantilla
+2. Tengan distractores plausibles dentro del mismo dominio temático
+3. La explicación sea específica: por qué la correcta es correcta Y por qué cada distractor es incorrecto
+4. Usen lenguaje natural, no frases plantilla
 
-Ejemplo de pregunta BUENA:
-{
-  "questionText": "¿Cuál es la capital de Francia?",
-  "options": {
-    "A": "París",
-    "B": "Londres",
-    "C": "Berlín",
-    "D": "Madrid"
-  },
-  "correctOption": "A",
-  "explanation": "París es la capital de Francia desde el siglo X. Las otras opciones son capitales de otros países europeos: Londres (Reino Unido), Berlín (Alemania) y Madrid (España).",
-  "subtopic": "geografía europea"
-}
+IMPORTANTE: La respuesta correcta debe VARIAR entre A, B, C y D. No siempre pongas A.
+
+Ejemplos de preguntas BUENAS (nota las diferentes letras correctas):
+
+{"questionText":"¿Cuál es la capital de Francia?","options":{"A":"París","B":"Londres","C":"Berlín","D":"Madrid"},"correctOption":"A","explanation":"París es la capital de Francia desde el siglo X. Londres es capital del Reino Unido, Berlín de Alemania y Madrid de España.","subtopic":"geografía europea"}
+
+{"questionText":"¿Qué lenguaje creó Guido van Rossum?","options":{"A":"Ruby","B":"Java","C":"Python","D":"Perl"},"correctOption":"C","explanation":"Python fue creado por Guido van Rossum en 1991. Ruby lo creó Matsumoto, Java fue desarrollado por Sun Microsystems y Perl por Larry Wall.","subtopic":"historia de lenguajes"}
+
+{"questionText":"¿Cuál planeta del sistema solar tiene más lunas?","options":{"A":"Marte","B":"Saturno","C":"Júpiter","D":"Urano"},"correctOption":"B","explanation":"Saturno tiene más de 140 lunas confirmadas, superando a Júpiter. Marte solo tiene 2 lunas y Urano tiene 27.","subtopic":"astronomía"}
 
 Ejemplo de pregunta MALA (NO GENERES ESTO):
-{
-  "questionText": "concepto 1",
-  "options": {
-    "A": "una explicación concisa del concepto 1",
-    "B": "una descripción parcialmente correcta del concepto 1",
-    "C": "una afirmación no relacionada",
-    "D": "una confusión común"
-  },
-  "correctOption": "A",
-  "explanation": "La opción A es correcta porque sí.",
-  "subtopic": "general"
-}
+{"questionText":"concepto 1","options":{"A":"una explicación concisa del concepto","B":"una descripción parcial","C":"afirmación no relacionada","D":"confusión común"},"correctOption":"A","explanation":"La opción A es correcta porque sí.","subtopic":"general"}
 
-IMPORTANTE: 
-- NUNCA uses patrones como "concepto N", "afirmación resume mejor", "opción A/B/C/D" en las opciones
-- Cada pregunta debe ser sobre un aspecto específico y concreto del tema
-- Los distractores deben ser respuestas que alguien con conocimiento parcial podría elegir plausiblemente
+REGLAS CRÍTICAS:
+- NUNCA uses patrones como "concepto N", "opción A/B/C/D", "afirmación resume mejor"
+- La explicación DEBE mencionar la letra correcta tal como quedará en el JSON (ej: si correctOption es "C", la explicación dice "C es correcta porque...")
 - Toda la salida debe ser en español
-- Formato de salida: NDJSON (un objeto JSON válido por línea, SIN markdown)`;
+- Formato: NDJSON (un objeto JSON válido por línea, SIN markdown, SIN texto adicional)`;
   }
 
   private buildQualityPrompt(topic: string, difficulty: Difficulty, count: number): string {
     const difficultyText: Record<Difficulty, string> = {
-      EASY: "básico - conceptos fundamentales, definiciones, datos concretos",
-      MEDIUM: "intermedio - aplicación de conceptos, relaciones entre ideas",
-      HARD: "avanzado - análisis crítico, resolución de problemas complejos"
+      EASY: "básico — conceptos fundamentales, definiciones, datos concretos",
+      MEDIUM: "intermedio — aplicación de conceptos, relaciones entre ideas",
+      HARD: "avanzado — análisis crítico, resolución de problemas complejos"
     };
 
-    return `Genera exactamente ${count} preguntas de opción multiple sobre "${topic}".
+    // Suggest varied correct options to counteract model bias
+    const optionHints = ["B", "D", "A", "C", "B", "D", "C", "A", "D", "B", "C", "A", "D", "C", "B"];
+    const hints = optionHints.slice(0, count).join(", ");
+
+    return `Genera exactamente ${count} preguntas de opción múltiple sobre "${topic}".
 
 DIFICULTAD: ${difficultyText[difficulty]}
 
 REGLAS OBLIGATORIAS:
 1. Cada pregunta debe evaluar un aspecto CONCRETO y ESPECÍFICO del tema "${topic}"
-2. Las opciones incorrectas (distractores) deben ser plausibles - respuestas que alguien con conocimiento parcial podría elegir
-3. La explicación debe ser detallada: explica por qué la correcta es correcta Y por qué cada distractora es incorrecta
+2. Los distractores deben ser plausibles — respuestas que alguien con conocimiento parcial elegiría
+3. La explicación debe ser detallada: explica por qué la correcta es correcta Y por qué cada distractor es incorrecto
 4. NO uses frases plantilla como "concepto 1", "afirmación resume mejor", etc.
-5. NO repitas el texto del tema en cada opción (ej: no pongas "${topic}" en todas las opciones)
-6. El subtopic debe ser un aspecto específico, no genérico
+5. NO repitas el texto "${topic}" en todas las opciones
+6. El subtopic debe ser un aspecto específico del tema, no "general"
+7. DISTRIBUYE la respuesta correcta: usa letras variadas. Sugerencia para esta tanda: ${hints}
+8. La explicación DEBE referenciar la letra correcta (ej: "La opción C es correcta porque...")
 
-FORMATO: NDJSON - un objeto JSON válido por línea, sin markdown, sin arrays, sin texto adicional.
+FORMATO: NDJSON — un objeto JSON válido por línea, sin markdown, sin arrays, sin comentarios.
 
 Ejemplo de formato exacto:
-{"questionText":"...","options":{"A":"...","B":"...","C":"...","D":"..."},"correctOption":"A","explanation":"...","subtopic":"..."}`;
+{"questionText":"...","options":{"A":"...","B":"...","C":"...","D":"..."},"correctOption":"B","explanation":"La opción B es correcta porque... La A es incorrecta porque... La C es incorrecta porque...","subtopic":"..."}`;
   }
+
+  // ── Cache helpers ─────────────────────────────────────────────────────────
 
   private buildCacheKey(topic: string, difficulty: Difficulty, count: number): string {
     const normalizedTopic = topic.trim().toLowerCase().replace(/\s+/g, " ");
-    return `${normalizedTopic}::${difficulty}::${count}::es-v2-quality`;
+    return `${normalizedTopic}::${difficulty}::${count}::es-v3-quality`;
   }
 
   private pruneGenerationCache() {
@@ -467,6 +521,8 @@ Ejemplo de formato exacto:
       cache.delete(key);
     }
   }
+
+  // ── Question parsing & validation ─────────────────────────────────────────
 
   private parseQuestionLine(rawLine: string): LlmQuestion | null {
     const line = rawLine
@@ -543,8 +599,12 @@ Ejemplo de formato exacto:
     return `${question.questionText.trim().toLowerCase()}::${optionValues}`;
   }
 
+  // ── Shuffle + explanation rewrite ─────────────────────────────────────────
+
   private randomizeQuestionOptions(question: LlmQuestion): LlmQuestion {
     const optionSlots = ["A", "B", "C", "D"] as const;
+
+    // Build a shuffled mapping: shuffled[newIndex].key = originalKey
     const shuffled = optionSlots.map((key) => ({ key, text: question.options[key] }));
 
     for (let i = shuffled.length - 1; i > 0; i -= 1) {
@@ -559,15 +619,45 @@ Ejemplo de formato exacto:
       D: shuffled[3].text
     };
 
+    // Map: original key → new key
+    const oldToNew: Record<string, string> = {};
+    for (let i = 0; i < optionSlots.length; i++) {
+      oldToNew[shuffled[i].key] = optionSlots[i];
+    }
+
     const remappedIndex = shuffled.findIndex((entry) => entry.key === question.correctOption);
     const remappedCorrectOption = remappedIndex >= 0 ? optionSlots[remappedIndex] : question.correctOption;
+
+    // Rewrite letter references in the explanation to match the new layout.
+    // Use placeholder tokens to avoid chained replacement (e.g. A→C then C→D).
+    let updatedExplanation = question.explanation;
+    const needsRewrite = Object.entries(oldToNew).some(([oldKey, newKey]) => oldKey !== newKey);
+
+    if (needsRewrite) {
+      // Phase 1: replace "opción X" / "la X" / "respuesta X" patterns with __SLOT_X__ tokens
+      for (const oldKey of optionSlots) {
+        const newKey = oldToNew[oldKey];
+        if (oldKey === newKey) continue;
+        updatedExplanation = updatedExplanation.replace(
+          new RegExp(`\\b(opci[oó]n|respuesta|alternativa|la|el)\\s+${oldKey}\\b`, "gi"),
+          `$1 __SLOT_${newKey}__`
+        );
+      }
+      // Phase 2: resolve tokens to actual keys
+      for (const slot of optionSlots) {
+        updatedExplanation = updatedExplanation.replaceAll(`__SLOT_${slot}__`, slot);
+      }
+    }
 
     return {
       ...question,
       options: remappedOptions,
-      correctOption: remappedCorrectOption
+      correctOption: remappedCorrectOption,
+      explanation: updatedExplanation
     };
   }
+
+  // ── Quality filters ───────────────────────────────────────────────────────
 
   private isSpanishQuestion(question: LlmQuestion): boolean {
     const text = [
@@ -584,6 +674,17 @@ Ejemplo de formato exacto:
   }
 
   private isQualityQuestion(question: LlmQuestion): boolean {
+    // Valid correctOption
+    if (!["A", "B", "C", "D"].includes(question.correctOption)) {
+      return false;
+    }
+
+    // The correct answer text must exist and be non-trivial
+    const correctText = question.options[question.correctOption as keyof typeof question.options];
+    if (!correctText || correctText.trim().length < 3) {
+      return false;
+    }
+
     const fullText = [
       question.questionText,
       question.options.A,
@@ -631,50 +732,15 @@ Ejemplo de formato exacto:
       .filter(Boolean);
 
     const englishMarkers = new Set([
-      "the",
-      "which",
-      "what",
-      "is",
-      "are",
-      "and",
-      "or",
-      "with",
-      "about",
-      "correct",
-      "incorrect",
-      "because",
-      "best",
-      "option",
-      "question",
-      "statement",
-      "true",
-      "false",
-      "answer"
+      "the", "which", "what", "is", "are", "and", "or", "with",
+      "about", "correct", "incorrect", "because", "best", "option",
+      "question", "statement", "true", "false", "answer"
     ]);
 
     const spanishMarkers = new Set([
-      "el",
-      "la",
-      "los",
-      "las",
-      "que",
-      "cual",
-      "es",
-      "son",
-      "y",
-      "o",
-      "con",
-      "sobre",
-      "correcta",
-      "incorrecta",
-      "porque",
-      "mejor",
-      "opcion",
-      "pregunta",
-      "afirmacion",
-      "verdadero",
-      "falso",
-      "respuesta"
+      "el", "la", "los", "las", "que", "cual", "es", "son", "y", "o",
+      "con", "sobre", "correcta", "incorrecta", "porque", "mejor",
+      "opcion", "pregunta", "afirmacion", "verdadero", "falso", "respuesta"
     ]);
 
     let englishCount = 0;
@@ -688,6 +754,8 @@ Ejemplo de formato exacto:
     if (englishCount === 0) return true;
     return spanishCount >= englishCount;
   }
+
+  // ── Local fallback ────────────────────────────────────────────────────────
 
   private buildFallbackQuestions(
     topic: string,

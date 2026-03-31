@@ -46,6 +46,8 @@ const EnvSchema = z.object({
     .default("qwen/qwen3-next-80b-a3b-instruct:free"),
   OPENROUTER_SITE_URL: z.string().url().default("http://localhost:3000"),
   OPENROUTER_SITE_NAME: z.string().default("QuizDinamico AI"),
+  CEREBRAS_API_KEY: z.string().optional(),
+  CEREBRAS_MODEL: z.string().default("qwen-3-235b-a22b-instruct-2507"),
   LLM_CACHE_TTL_SEC: z.coerce.number().int().positive().default(3600),
   SSE_STATE_TTL_SEC: z.coerce.number().int().positive().default(300),
   LLM_PROMPT_TOKEN_COST_USD: z.coerce.number().min(0).default(0),

@@ -26,7 +26,7 @@ Gracias a una conexión de datos directa (Server-Sent Events), las preguntas apa
 
 | Pantalla de Inicio | Dashboard de Consultas | Cuestionario en Acción |
 | :---: | :---: | :---: |
-| <img src="./Inicio.png" width="300" height="auto" alt="Pantalla de inicio" /> | <img src="./dashboard.png" width="300" height="auto" alt="Dashboard y consultas" /> | <img src="./Cuestionario.png" width="300" height="auto" alt="Generación en streaming" /> |
+| <img src="./assets/Inicio.png" width="300" height="auto" alt="Pantalla de inicio" /> | <img src="./assets/dashboard.png" width="300" height="auto" alt="Dashboard y consultas" /> | <img src="./assets/Cuestionario.png" width="300" height="auto" alt="Generación en streaming" /> |
 
 <br>
 

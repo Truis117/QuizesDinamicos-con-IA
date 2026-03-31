@@ -37,5 +37,4 @@ sample_response.json
 .agents/
 skills-lock.json
 plan.md
-issue.md
-*.png
+issue.md+

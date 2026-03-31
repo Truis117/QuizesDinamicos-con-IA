@@ -15,6 +15,15 @@
   --font-sans: "Inter", "Open Sans", ui-sans-serif, system-ui, sans-serif;
   --font-heading: "Poppins", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* Custom animations for Tailwind v4 */
+  --animate-pulse-soft: pulse-soft 8s ease-in-out infinite;
+  --animate-pulse-soft-reverse: pulse-soft 10s ease-in-out infinite reverse;
+  --animate-fade-up: fade-up 0.5s ease-out forwards;
+  --animate-quick-shake: quick-shake 220ms ease-out 1;
+  --animate-confetti-fall: confetti-fall 0.85s ease-in forwards;
+  --animate-fade-in: fade-in 0.5s ease-out forwards;
+  --animate-typing-demo: typing-demo 2s steps(30) forwards;
 }
 
 @layer base {
@@ -48,52 +57,39 @@
     transform: translateZ(0);
     will-change: transform;
   }
-
-  .text-balance {
-    text-wrap: balance;
-  }
 }
 
 @keyframes pulse-soft {
-  0% {
-    transform: scale(1);
-    opacity: 0.35;
-  }
-  50% {
-    transform: scale(1.07);
-    opacity: 0.55;
-  }
-  100% {
-    transform: scale(1);
-    opacity: 0.35;
-  }
+  0%   { transform: scale(1); opacity: 0.35; }
+  50%  { transform: scale(1.07); opacity: 0.55; }
+  100% { transform: scale(1); opacity: 0.35; }
 }
 
 @keyframes fade-up {
-  0% {
-    transform: translateY(10px);
-    opacity: 0;
-  }
-  100% {
-    transform: translateY(0);
-    opacity: 1;
-  }
+  0%   { transform: translateY(10px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
 }
 
 @keyframes quick-shake {
-  0% {
-    transform: translateX(0);
-  }
-  25% {
-    transform: translateX(-3px);
-  }
-  50% {
-    transform: translateX(3px);
-  }
-  75% {
-    transform: translateX(-2px);
-  }
-  100% {
-    transform: translateX(0);
-  }
+  0%   { transform: translateX(0); }
+  25%  { transform: translateX(-3px); }
+  50%  { transform: translateX(3px); }
+  75%  { transform: translateX(-2px); }
+  100% { transform: translateX(0); }
+}
+
+@keyframes confetti-fall {
+  0%   { transform: translateY(-20px) rotate(0deg); opacity: 1; }
+  80%  { opacity: 1; }
+  100% { transform: translateY(340px) rotate(540deg); opacity: 0; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes typing-demo {
+  from { max-width: 0ch; }
+  to   { max-width: 60ch; }
 }

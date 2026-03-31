@@ -3,6 +3,57 @@ import { api } from "../lib/apiClient";
 import { useQuizStream } from "../lib/useQuizStream";
 import { useSeo } from "../lib/seo";
 
+// ── 2.1 Typewriter ────────────────────────────────────────────────────────────
+function TypewriterText({ text, animate }: { text: string; animate: boolean }) {
+  const [displayed, setDisplayed] = useState(animate ? "" : text);
+  const [done, setDone]           = useState(!animate);
+  useEffect(() => {
+    if (!animate) { setDisplayed(text); setDone(true); return; }
+    setDisplayed(""); setDone(false);
+    let i = 0;
+    const id = setInterval(() => {
+      i += 2;
+      setDisplayed(text.slice(0, Math.min(i, text.length)));
+      if (i >= text.length) { clearInterval(id); setDone(true); }
+    }, 12);
+    return () => clearInterval(id);
+  }, [text, animate]);
+  return (
+    <>
+      {displayed}
+      {!done && <span className="inline-block w-0.5 h-[0.9em] bg-accent-light/70 animate-pulse align-middle ml-px" />}
+    </>
+  );
+}
+
+// ── 2.3 Confetti ─────────────────────────────────────────────────────────────
+const CONFETTI_PARTICLES = Array.from({ length: 52 }, (_, i) => ({
+  id:    i,
+  left:  `${((i * 7.3 + 3) % 97).toFixed(1)}%`,
+  color: ["#5E6AD2","#10B981","#F59E0B","#EF4444","#8B5CF6","#06B6D4","#F472B6","#FB923C"][i % 8],
+  delay: `${((i * 0.07) % 0.8).toFixed(2)}s`,
+  dur:   `${(0.85 + (i % 7) * 0.1).toFixed(2)}s`,
+  size:  `${6 + (i % 6) * 2}px`,
+  shape: (["50%", "2px", "0%"] as const)[i % 3],
+  rot:   `${(i * 47) % 360}deg`,
+}));
+
+function Confetti() {
+  return (
+    <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-3xl">
+      {CONFETTI_PARTICLES.map((p) => (
+        <div
+          key={p.id}
+          className="absolute"
+          style={{ left: p.left, top: 0, animation: `confetti-fall ${p.dur} ease-in ${p.delay} forwards` }}
+        >
+          <div style={{ width: p.size, height: p.size, backgroundColor: p.color, borderRadius: p.shape, transform: `rotate(${p.rot})` }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 type DifficultyOption = "EASY" | "MEDIUM" | "HARD";
 
 type AnswerFeedback = {
@@ -41,14 +92,15 @@ export function QuizRunner({ sessionId, onBack }: { sessionId: string; onBack: (
     restart
   } = useQuizStream(sessionId);
 
-  const [answers, setAnswers] = useState<Record<string, AnswerFeedback>>({});
-  const [submitError, setSubmitError] = useState<string | null>(null);
-  const [streak, setStreak] = useState(0);
-  const [nextRoundCount, setNextRoundCount] = useState<(typeof QUESTION_COUNTS)[number]>(5);
+  const [answers, setAnswers]                     = useState<Record<string, AnswerFeedback>>({});
+  const [submitError, setSubmitError]              = useState<string | null>(null);
+  const [streak, setStreak]                        = useState(0);
+  const [nextRoundCount, setNextRoundCount]        = useState<(typeof QUESTION_COUNTS)[number]>(5);
   const [nextRoundDifficulty, setNextRoundDifficulty] = useState<DifficultyOption>("MEDIUM");
   const [isCreatingNextRound, setIsCreatingNextRound] = useState(false);
-  const [nextRoundError, setNextRoundError] = useState<string | null>(null);
-  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [nextRoundError, setNextRoundError]        = useState<string | null>(null);
+  const rootRef      = useRef<HTMLDivElement | null>(null);
+  const seenQIds     = useRef<Set<string>>(new Set()); // track new questions for 2.1
 
   useSeo({
     title: "Sesion en curso | QuizDinamico AI",
@@ -70,6 +122,7 @@ export function QuizRunner({ sessionId, onBack }: { sessionId: string; onBack: (
       setAnswers({});
       setSubmitError(null);
       setNextRoundError(null);
+      seenQIds.current.clear(); // reset typewriter tracking on new round
     }
   }, [status]);
 
@@ -141,6 +194,9 @@ export function QuizRunner({ sessionId, onBack }: { sessionId: string; onBack: (
   };
 
   const answeredCount = Object.keys(answers).length;
+  const correctCount  = Object.values(answers).filter((a) => a.isCorrect).length;
+  const roundAccuracy = answeredCount > 0 ? correctCount / answeredCount : 0;
+  const showConfetti  = status === "DONE" && roundAccuracy >= 0.7;
 
   const handleKeyboardChoice = (event: React.KeyboardEvent<HTMLElement>) => {
     const keyToOption: Record<string, string> = {
@@ -252,7 +308,11 @@ export function QuizRunner({ sessionId, onBack }: { sessionId: string; onBack: (
               }`}
             >
               <h3 className="text-xl md:text-2xl font-heading font-medium text-white mb-6 leading-relaxed">
-                {q.questionText}
+                {(() => {
+                  const isNew = !seenQIds.current.has(q.id);
+                  if (isNew) seenQIds.current.add(q.id);
+                  return <TypewriterText text={q.questionText} animate={isNew && !isAnswered} />;
+                })()}
               </h3>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -318,7 +378,8 @@ export function QuizRunner({ sessionId, onBack }: { sessionId: string; onBack: (
         })}
 
         {status === "DONE" && (
-          <div className="w-full p-8 rounded-3xl bg-accent/10 border border-accent/30 shadow-[0_0_40px_rgba(94,106,210,0.2)] animate-in zoom-in fade-in duration-500 mt-8">
+          <div className="relative w-full p-8 rounded-3xl bg-accent/10 border border-accent/30 shadow-[0_0_40px_rgba(94,106,210,0.2)] animate-in zoom-in fade-in duration-500 mt-8 overflow-hidden">
+            {showConfetti && <Confetti />}
             <h2 className="text-3xl font-heading font-bold text-white mb-2 text-center">Ronda completada!</h2>
             <p className="text-white/60 mb-8 text-lg text-center">
               Puedes continuar en el mismo tema sin volver al inicio.

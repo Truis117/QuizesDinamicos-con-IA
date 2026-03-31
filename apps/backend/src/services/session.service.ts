@@ -382,33 +382,24 @@ export class SessionService {
       const nextTotal = nextCorrect + nextWrong;
       const masteryScore = nextTotal === 0 ? 0 : nextCorrect / nextTotal;
 
-      if (mastery) {
-        await tx.subtopicMastery.update({
-          where: {
-            userId_topic_subtopic: {
-              userId,
-              topic,
-              subtopic
-            }
-          },
-          data: {
-            correctCount: nextCorrect,
-            wrongCount: nextWrong,
-            masteryScore
-          }
-        });
-      } else {
-        await tx.subtopicMastery.create({
-          data: {
-            userId,
-            topic,
-            subtopic,
-            correctCount: nextCorrect,
-            wrongCount: nextWrong,
-            masteryScore
-          }
-        });
-      }
+      await tx.subtopicMastery.upsert({
+        where: {
+          userId_topic_subtopic: { userId, topic, subtopic }
+        },
+        create: {
+          userId,
+          topic,
+          subtopic,
+          correctCount: nextCorrect,
+          wrongCount: nextWrong,
+          masteryScore
+        },
+        update: {
+          correctCount: nextCorrect,
+          wrongCount: nextWrong,
+          masteryScore
+        }
+      });
 
       return {
         attempt,

@@ -103,31 +103,10 @@ function escapeHtmlAttr(value: string) {
   return escapeHtmlText(value);
 }
 
-function upsertMetaByName(html: string, name: string, content: string) {
-  const escapedName = escapeRegex(name);
-  const tag = `<meta name="${name}" content="${escapeHtmlAttr(content)}" />`;
-  const pattern = new RegExp(`<meta\\s+[^>]*name=["']${escapedName}["'][^>]*>`, "i");
-
-  if (pattern.test(html)) {
-    return html.replace(pattern, tag);
-  }
-
-  return html.replace("</head>", `  ${tag}\n</head>`);
-}
-
-function upsertMetaByProperty(html: string, property: string, content: string) {
-  const escapedProperty = escapeRegex(property);
-  const tag = `<meta property="${property}" content="${escapeHtmlAttr(content)}" />`;
-  const pattern = new RegExp(
-    `<meta\\s+[^>]*property=["']${escapedProperty}["'][^>]*>`,
-    "i"
-  );
-
-  if (pattern.test(html)) {
-    return html.replace(pattern, tag);
-  }
-
-  return html.replace("</head>", `  ${tag}\n</head>`);
+function upsertMeta(html: string, attr: "name" | "property", key: string, content: string) {
+  const tag = `<meta ${attr}="${key}" content="${escapeHtmlAttr(content)}" />`;
+  const pattern = new RegExp(`<meta\\s+[^>]*${attr}=["']${escapeRegex(key)}["'][^>]*>`, "i");
+  return pattern.test(html) ? html.replace(pattern, tag) : html.replace("</head>", `  ${tag}\n</head>`);
 }
 
 function upsertCanonical(html: string, canonicalUrl: string) {
@@ -212,20 +191,20 @@ function renderFrontendWithSeo(payload: SeoPayload) {
     html = html.replace("</head>", `  ${titleTag}\n</head>`);
   }
 
-  html = upsertMetaByName(html, "description", payload.description);
-  html = upsertMetaByName(html, "robots", payload.robots ?? "index,follow");
+  html = upsertMeta(html, "name", "description", payload.description);
+  html = upsertMeta(html, "name", "robots", payload.robots ?? "index,follow");
 
-  html = upsertMetaByProperty(html, "og:type", "website");
-  html = upsertMetaByProperty(html, "og:site_name", "QuizDinamico AI");
-  html = upsertMetaByProperty(html, "og:title", payload.title);
-  html = upsertMetaByProperty(html, "og:description", payload.description);
-  html = upsertMetaByProperty(html, "og:url", canonicalUrl);
-  html = upsertMetaByProperty(html, "og:image", imageUrl);
+  html = upsertMeta(html, "property", "og:type", "website");
+  html = upsertMeta(html, "property", "og:site_name", "QuizDinamico AI");
+  html = upsertMeta(html, "property", "og:title", payload.title);
+  html = upsertMeta(html, "property", "og:description", payload.description);
+  html = upsertMeta(html, "property", "og:url", canonicalUrl);
+  html = upsertMeta(html, "property", "og:image", imageUrl);
 
-  html = upsertMetaByName(html, "twitter:card", "summary_large_image");
-  html = upsertMetaByName(html, "twitter:title", payload.title);
-  html = upsertMetaByName(html, "twitter:description", payload.description);
-  html = upsertMetaByName(html, "twitter:image", imageUrl);
+  html = upsertMeta(html, "name", "twitter:card", "summary_large_image");
+  html = upsertMeta(html, "name", "twitter:title", payload.title);
+  html = upsertMeta(html, "name", "twitter:description", payload.description);
+  html = upsertMeta(html, "name", "twitter:image", imageUrl);
 
   html = upsertCanonical(html, canonicalUrl);
   html = upsertSchema(html, payload.schemaJson);

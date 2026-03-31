@@ -9,6 +9,15 @@ export function Dashboard({ onStartSession }: { onStartSession: (id: string) => 
   const [questionCount, setQuestionCount] = useState(5);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const [userStreak, setUserStreak] = useState<number | null>(null);
+
+  React.useEffect(() => {
+    api.json("/auth/me")
+      .then((data: any) => {
+        setUserStreak(data.currentStreak);
+      })
+      .catch((err) => console.error("Could not fetch user stats:", err));
+  }, []);
 
   useSeo({
     title: "Dashboard | QuizDinamico AI",
@@ -61,6 +70,14 @@ export function Dashboard({ onStartSession }: { onStartSession: (id: string) => 
             Cerrar sesion
           </button>
         </div>
+
+        {userStreak !== null && userStreak > 0 && (
+          <div className="absolute top-4 left-4">
+            <div className="px-4 py-1.5 rounded-full bg-orange-500/10 border border-orange-500/20 text-orange-400 font-mono font-bold animate-pulse shadow-[0_0_15px_rgba(249,115,22,0.2)]">
+              🔥 Racha {userStreak}
+            </div>
+          </div>
+        )}
 
         <div className="text-center mt-8 mb-10">
           <h1 className="text-balance text-4xl md:text-5xl font-heading font-bold mb-4 bg-gradient-to-r from-white to-white/60 bg-clip-text text-transparent">

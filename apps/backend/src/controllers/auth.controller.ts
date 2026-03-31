@@ -52,4 +52,17 @@ export class AuthController {
     await this.authService.logout(data.refreshToken);
     res.json({ ok: true });
   }
+
+  async getMe(req: Request, res: Response, next: NextFunction) {
+    try {
+      if (!req.userId) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+      const result = await this.authService.getMe(req.userId);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
 }

@@ -228,35 +228,35 @@ export function Dashboard({ onStartSession }: { onStartSession: (id: string) => 
       </div>
 
       {/* ── Session history (1.1) ────────────────────────────────── */}
-      <div className="w-full">
-        <h2 className="text-xs font-semibold text-white/35 uppercase tracking-widest mb-4 px-1">
+      <section className="w-full" aria-labelledby="recent-sessions-heading">
+        <h2 id="recent-sessions-heading" className="text-xs font-semibold text-white/60 uppercase tracking-widest mb-4 px-1">
           Sesiones recientes
         </h2>
 
         {sessionsLoading ? (
-          <div className="space-y-3">
+          <div className="space-y-3" aria-hidden="true">
             {[1, 2, 3].map((i) => (
-              <div key={i} className="h-[68px] rounded-2xl bg-white/[0.03] border border-white/5 animate-pulse" />
+              <div key={i} className="h-[68px] rounded-2xl bg-white/[0.03] border border-white/5 animate-pulse motion-reduce:animate-none" />
             ))}
           </div>
         ) : sessions.length === 0 ? (
-          <div className="rounded-2xl border border-white/5 bg-white/[0.02] p-6 text-center text-white/35 text-sm">
+          <div className="rounded-2xl border border-white/5 bg-white/[0.02] p-6 text-center text-white/60 text-sm">
             Todavía no tienes sesiones. ¡Crea tu primer quiz arriba!
           </div>
         ) : (
-          <div className="space-y-3">
+          <ul role="list" className="space-y-3">
             {sessions.slice(0, 6).map((session) => {
               const lastRound = session.rounds[0];
               const diff: DifficultyOption =
                 lastRound?.requestedDifficulty ?? session.currentDifficulty ?? "MEDIUM";
               return (
-                <div
+                <li
                   key={session.id}
-                  className="group flex items-center justify-between gap-4 p-4 rounded-2xl border border-white/10 bg-white/[0.03] hover:bg-white/[0.06] hover:border-white/15 transition-all duration-150"
+                  className="group flex items-center justify-between gap-4 p-4 rounded-2xl border border-white/10 bg-white/[0.03] hover:bg-white/[0.06] hover:border-white/15 transition-all motion-reduce:transition-none duration-150"
                 >
                   <div className="flex-1 min-w-0">
                     <p className="text-white font-medium truncate">{session.topic}</p>
-                    <p className="text-xs text-white/40 mt-0.5">
+                    <p className="text-xs text-white/60 mt-0.5">
                       {formatRelativeDate(session.createdAt)}
                       {lastRound && ` · Ronda ${lastRound.roundIndex}`}
                     </p>
@@ -268,17 +268,18 @@ export function Dashboard({ onStartSession }: { onStartSession: (id: string) => 
                     </span>
                     <button
                       onClick={() => onStartSession(session.id)}
-                      className="text-sm px-4 py-1.5 rounded-xl bg-accent/10 border border-accent/20 text-accent-light hover:bg-accent/20 transition-all duration-150"
+                      aria-label={`Continuar sesión de ${session.topic}`}
+                      className="flex items-center justify-center min-h-[44px] min-w-[44px] text-sm px-4 py-1.5 rounded-xl bg-accent/10 border border-accent/20 text-accent-light hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-[#1e1e2f] transition-all motion-reduce:transition-none duration-150"
                     >
                       Continuar →
                     </button>
                   </div>
-                </div>
+                </li>
               );
             })}
-          </div>
+          </ul>
         )}
-      </div>
+      </section>
     </div>
   );
 }
